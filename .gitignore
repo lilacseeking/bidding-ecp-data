@@ -9,4 +9,8 @@ venv/
 data/raw/
 data/downloads/
 data/extracted/
+data/excels/
+data/ecp_data.db
+data/failed_parse.json
+data/hardcoded_fixes.json
 *.tmp

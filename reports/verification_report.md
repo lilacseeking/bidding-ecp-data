@@ -1,213 +1,161 @@
 # 国网冀北电力物资采购数据采集 — 验证报告
 
 > 验证日期：2026-06-28  
-> 目标单位：国网冀北电力有限公司（含全部子公司）  
-> 工程：bidding-ecp-data
+> 目标：国网冀北电力有限公司（含全部子公司）  
+> 数据来源：国家电网电子商务平台 ECP2.0（**无需登录**）
 
 ---
 
-## 1. 验证目的
+## 1. 执行摘要
 
-确认能否从国家电网电子商务平台 (ECP2.0) **无需登录**地获取以下字段：
-
-| 目标字段 | 来源 |
-|----------|------|
-| 物资名称 | 货物清单 Excel |
-| 物资描述/规格 | 货物清单 Excel |
-| 需求数量 | 货物清单 Excel |
-| 计量单位 | 货物清单 Excel |
-| 包号 | 货物清单 Excel |
-| 分标名称 | 货物清单 Excel |
-| 项目单位（子公司） | 货物清单 Excel |
+| 指标 | 数值 |
+|------|------|
+| 冀北物资正刊公告 | **73 条** |
+| 成功解析 | **46 条**（63%） |
+| 物资明细条目 | **34,281 条** |
+| 项目单位 | **1,091 个** |
+| 时间跨度 | **2020-05 ~ 2026-06（6年）** |
+| Excel文件保存 | **46 个**（以项目编号命名） |
+| 失败/待处理 | 27 条（17条ZIP无XLSX + 10条下载空） |
 
 ---
 
 ## 2. 数据获取流程
 
 ```
-ECP noteList API (公开, 无需登录)
-    │
-    ▼
-获取冀北108条物资招标公告元数据
-    │
-    ▼
-筛选正刊公告 (排除变更公告)
-    │
-    ▼
-GET downLoadBid API (公开, 无需登录)
-  https://ecp.sgcc.com.cn/ecp2.0/ecpwcmcore//index/downLoadBid?noticeId={noticeId}&noticeDetId=
-    │
-    ▼
-下载 ZIP 文件 → 解压 → 货物清单.xlsx
-    │
-    ▼
-解析 Excel (openpyxl) → 逐行提取物资明细
-    │
-    ▼
-写入 SQLite bid_items 表
+noteList API (POST, 公开)
+  → 401条冀北公告 → 筛选物资正刊 73条
+       │
+       ▼
+downLoadBid API (GET, 公开)
+  URL: /ecp2.0/ecpwcmcore//index/downLoadBid?noticeId={noticeId}&noticeDetId=
+  → 下载 ZIP → data/excels/{项目编号}.zip
+       │
+       ▼
+unzip → 识别货物清单XLSX (表头含"物资名称")
+  → data/excels/{项目编号}.xlsx
+       │
+       ▼
+openpyxl 逐Sheet解析 → bid_items 表
+  自动检测列映射 + 硬编码修正兜底
+       │
+       ▼
+Phase 5 复核: 去重检查 + 遗漏检查 + 差异报告
 ```
 
 ---
 
-## 3. 验证结果
+## 3. 字段覆盖
 
-### 3.1 抽样执行
-
-| 步骤 | 结果 |
-|------|------|
-| 物资公告总数 | **108 条** |
-| 抽样下载 | 10 条 |
-| 下载成功（正刊） | 5 条 |
-| 跳过（变更公告/空ZIP） | 5 条 |
-| 货物清单解析成功 | 3 条 |
-| 提取物资明细 | **21,934 条** |
-
-> 注：2条正刊公告的XLSX解析返回0行，原因是Excel内部结构异常（行列映射偏移），待修复。
-
-### 3.2 Excel货物清单结构
-
-每个公告的ZIP包含一个 `货物清单_*.xlsx`，结构如下：
-
-| 列 | 字段 | 示例 |
-|----|------|------|
-| A | 分标编号 | `0126W4-1502009-9999` |
-| B | 包名称 | `包1` |
-| C | 分包编号 | `NC100` |
-| D | 项目单位 | `国网冀北电力有限公司` |
-| E | 需求单位 | `国网冀北电力有限公司唐山供电公司` |
-| F | 项目名称 | `冀北段线路工程` |
-| G | 工程电压等级 | `1000kV` |
-| H | **物资名称** | `防鸟设备` |
-| I | **物资描述** | `防鸟设备,通用,通用` |
-| J | **单位** | `台` |
-| K | **数量** | `96` |
-| L | 首批交货日期 | `2026-10-09` |
-| M | 最后一批交货日期 | `2026-10-09` |
-| N | 交货地点 | `河北省张家口市涿鹿县` |
-| O | 交货方式 | `施工现场地面交货` |
-
-每个Sheet对应一个分标名称（如"防鸟设备"、"交流避雷器"、"低压电力电缆"），一个Excel含86个Sheet。
-
-### 3.3 物资覆盖
-
-| 类别 | 明细 |
-|------|------|
-| 物资种类 | 130+ 种 |
-| 主要设备 | 低压电力电缆、交流避雷器、一二次融合成套柱上断路器、环网箱、开关柜、防鸟设备、锥形水泥杆等 |
-| 计量单位 | 千米、台、套、只、个、米、吨、付、面、根、块、千克等18种 |
-
-### 3.4 子公司覆盖
-
-从货物清单的"项目单位"和"需求单位"字段中，确认覆盖冀北全部地区：
-
-| 城市 | 识别到的单位 |
-|------|------------|
-| **唐山** | 唐山供电公司、曹妃甸区供电分公司、乐亭县供电分公司 |
-| **承德** | 承德供电公司、承德县供电分公司、围场县供电分公司、平泉市供电分公司 |
-| **张家口** | 张家口供电公司、风光储输新能源有限公司 |
-| **秦皇岛** | 秦皇岛供电公司、抚宁区供电分公司、卢龙县供电分公司、青龙县供电分公司 |
-| **廊坊** | 廊坊供电公司、固安县供电分公司、大厂县供电分公司、大城县供电分公司、文安县供电分公司、永清县供电分公司、霸州市供电分公司、香河县供电分公司 |
-| **北京** | 工程管理分公司、超高压分公司、信息通信分公司、电力科学研究院、北京送变电有限公司 |
-
-共识别 **104个项目单位**。
+| 目标字段 | 来源 | 可用 | Excel列 |
+|----------|------|:---:|---------|
+| 物资名称 | 货物清单 | ✅ | H |
+| 物资描述/规格 | 货物清单 | ✅ | I |
+| 需求数量 | 货物清单 | ✅ | K |
+| 计量单位 | 货物清单 | ✅ | J |
+| 包号（分包编号） | 货物清单 | ✅ | C |
+| 分标名称 | Sheet名 | ✅ | Tab名 |
+| 分标编号 | 货物清单 | ✅ | A |
+| 项目单位（子公司） | 货物清单 | ✅ | D |
+| 需求单位 | 货物清单 | ✅ | E |
+| 交货地点 | 货物清单 | ✅ | N |
+| 物料编码 | 货物清单 | ✅ | T |
+| 扩展描述 | 货物清单 | ✅ | U |
+| 电压等级/交货方式/项目名称 | 货物清单 → remark | ✅ | G/O/F |
 
 ---
 
-## 4. 关键API接口
+## 4. 复核机制
 
-### 4.1 招标公告列表（公开）
+### 4.1 防重复
 
+```sql
+-- bid_items 表唯一索引
+CREATE UNIQUE INDEX idx_items_unique ON bid_items(
+    notice_id, sub_bid_code, sub_bid_name, package_no, material_name
+);
 ```
-POST /ecp2.0/ecpwcmcore//index/noteList
-Body: {"firstPageMenuId":"2018032700291334","index":1,"orgId":"2019061900137008","size":50}
-返回: {count: 401, noteList: [{title, code, noticeId, noticePublishTime, ...}]}
-```
+INSERT OR IGNORE 自动跳过重复记录。
 
-### 4.2 中标公告列表（公开）
+### 4.2 防遗漏
 
+Phase 5 输出未处理公告清单：
 ```
-POST /ecp2.0/ecpwcmcore//index/noteList
-Body: {"firstPageMenuId":"2018060501171111","index":1,"orgId":"2019061900137008","size":50}
-返回: {count: 392, noteList: [{title, doctype:"doci-win", ...}]}
-```
-
-### 4.3 货物清单下载（公开）
-
-```
-GET /ecp2.0/ecpwcmcore//index/downLoadBid?noticeId={noticeId}&noticeDetId=
-返回: application/zip (含货物清单.xlsx + 招标公告.doc)
+SELECT notice_id, title FROM bid_notices
+WHERE category='material' AND doctype='doci-bid' AND detail_fetched=0
 ```
 
-**注意**：变告公告（doci-change）的ZIP为空，需跳过。
+### 4.3 防错误
+
+- 表头自动检测：只有含"物资名称"列的Sheet才被解析为货物清单
+- 失败记录持久化：`data/failed_parse.json`
+- 硬编码修正入口：`data/hardcoded_fixes.json`（当自动检测不生效时填入）
 
 ---
 
-## 5. 工程文件
+## 5. 未处理公告分析
+
+共27条未处理，分三类：
+
+| 类型 | 数量 | 原因 |
+|------|------|------|
+| ZIP无XLSX | 17 | 公告只有DOC文档，无货物清单Excel（为"新增/补充/打样/流标/融资租赁"等特殊采购类型） |
+| 下载空 | 10 | 较早公告（2020-2021年部分）下载接口返回空内容 |
+
+17条无XLSX的公告包括：2023-2021年的新增/补充/打样/流标/煤改电/融资租赁/调控物资专项等，这些特殊采购类型不包含标准化货物清单Excel。
+
+---
+
+## 6. 技术要点
+
+### 列映射自动检测
+
+不同公告的Excel列数不同（23列/27列），使用表头名称匹配而非硬编码列号：
+
+```python
+def detect_column_map(headers):
+    col_map = {}
+    for i, h in enumerate(headers):
+        if h == '物资名称': col_map['material_name'] = i
+        elif h == '数量':   col_map['quantity'] = i
+        # ...
+    return col_map if all(k in col_map for k in ['material_name','unit','quantity']) else None
+```
+
+### 项目编号唯一性
+
+```
+code唯一 → Excel命名为 {code}.xlsx  (例: JB26-HW-ZB04-0126W4.xlsx)
+code重复 → Excel命名为 {code}_{noticeId}.xlsx
+```
+
+### 货物清单识别
+
+每个ZIP含多个XLSX，通过检查第一个Sheet表头是否含"物资名称"来区分货物清单和投标保证金一览表。
+
+---
+
+## 7. 工程结构
 
 ```
 bidding-ecp-data/
-├── .gitignore
 ├── reports/
-│   └── verification_report.md    ← 本报告
+│   └── verification_report.md
 ├── data/
-│   ├── ecp_data.db               ← SQLite数据库
-│   └── samples/
-│       └── bid_items_sample.json ← 50条物资样本
+│   ├── ecp_data.db              ← 401公告 + 34,281物资 + 1,091单位
+│   ├── excels/                  ← 46个Excel (以项目编号命名)
+│   ├── failed_parse.json        ← 失败记录
+│   └── hardcoded_fixes.json     ← 硬编码修正 (按需填入)
 └── src/
-    ├── crawler/
-    │   └── ecp_client.py         ← ECP API客户端
-    ├── db/
-    │   └── schema.py             ← SQLite表结构 (6表+2视图)
-    └── pipeline.py               ← 完整采集流水线
+    ├── crawler/ecp_client.py    ← ECP API客户端
+    ├── db/schema.py             ← 表结构 (6表+去重索引)
+    └── pipeline.py              ← 流水线主程序
 ```
 
-### 运行方式
+### 运行
 
 ```bash
-# 验证模式 (下载10条)
-python src/pipeline.py
-
-# 全部采集 (修改 pipeline.py 中 MAX_DOWNLOAD = None)
-python src/pipeline.py
+python src/pipeline.py            # 增量 (只处理未解析的)
+python src/pipeline.py --full     # 全量 (重新下载全部)
+python src/pipeline.py --verify   # 仅复核
 ```
-
----
-
-## 6. 已知问题
-
-| 问题 | 影响 | 状态 |
-|------|------|------|
-| 变更公告ZIP为空 | 约30条无法获取货物清单 | 正常，变更公告无货物清单 |
-| 部分XLSX行列偏移 | 2条公告解析为0行 | 需修复Excel解析逻辑 |
-| ZIP文件名编码乱码 | Win32 unzip产生乱码文件名 | 不影响内容读取 |
-| 下载需礼貌延迟 | 全量108条约需5-10分钟 | 已内置0.3s延迟 |
-
----
-
-## 7. 数据维度总结
-
-| 维度 | 可用性 | 字段 |
-|------|--------|------|
-| 物资名称 | ✅ | `material_name` |
-| 物资描述/规格 | ✅ | `material_desc` |
-| 需求数量 | ✅ | `demand_quantity` |
-| 计量单位 | ✅ | `unit` |
-| 包号 | ✅ | `package_no` |
-| 分标名称 | ✅ | `sub_bid_name` |
-| 分标编号 | ✅ | `sub_bid_code` |
-| 项目单位（子公司） | ✅ | `project_org_name` |
-| 交货地点 | ✅ | `delivery_place` |
-| 交货日期 | ✅ | `delivery_date_first/last` |
-| 电压等级 | ✅ | 从Excel解析 |
-| 项目名称 | ✅ | 从Excel解析 |
-| **中标企业** | ❌ | 需中标公告（另有392条中标数据可用） |
-| **中标金额** | ❌ | 同上 |
-
----
-
-## 8. 下一步
-
-1. **修复Excel解析** — 2条公告的0行问题
-2. **全量执行** — `MAX_DOWNLOAD = None` 采集全部108条物资公告
-3. **匹配中标数据** — 将392条中标公告与招标公告关联，补全中标企业和金额
-4. **时序分析** — 按年度/批次/设备类型/地区维度汇总

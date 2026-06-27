@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS bid_notices (
     fetched_at      TEXT DEFAULT (datetime('now')), -- 列表数据获取时间
     detail_fetched  INTEGER DEFAULT 0,              -- 详情是否已爬取
     detail_fetched_at TEXT,                          -- 详情爬取时间
+    excel_path      TEXT,                            -- 保存的Excel文件路径
 
     created_at      TEXT DEFAULT (datetime('now')),
     updated_at      TEXT DEFAULT (datetime('now'))
@@ -79,6 +80,7 @@ CREATE TABLE IF NOT EXISTS bid_items (
     delivery_place  TEXT,                         -- 交货地点
     delivery_period TEXT,                         -- 交货期
     remark          TEXT,                         -- 备注
+    extended_desc   TEXT,                         -- 扩展描述 (来自Excel扩展描述列)
 
     -- 采购单位 (子公司维度)
     project_org_id  INTEGER,                      -- 关联 org_units.id
@@ -94,6 +96,11 @@ CREATE INDEX IF NOT EXISTS idx_items_notice_id ON bid_items(notice_id);
 CREATE INDEX IF NOT EXISTS idx_items_material_name ON bid_items(material_name);
 CREATE INDEX IF NOT EXISTS idx_items_sub_bid ON bid_items(sub_bid_name);
 CREATE INDEX IF NOT EXISTS idx_items_project_org ON bid_items(project_org_name);
+-- 去重约束: 同一公告+分标+包号+物资名 唯一
+CREATE UNIQUE INDEX IF NOT EXISTS idx_items_unique ON bid_items(
+    notice_id, COALESCE(sub_bid_code,''), COALESCE(sub_bid_name,''),
+    COALESCE(package_no,''), COALESCE(material_name,'')
+);
 
 -- ============================================================
 -- 3. 项目单位表 (子公司维度)
