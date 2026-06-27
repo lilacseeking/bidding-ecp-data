@@ -287,28 +287,13 @@ class EcpClient:
 
 
 if __name__ == "__main__":
-    # 快速自测
+    import io, sys
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     client = EcpClient()
-    print("=" * 60)
-    print("ECP2.0 API Client - 自测")
-    print("=" * 60)
-
-    # 测试1：获取冀北电力公告
-    jibei_id = ORG_MAP["国网冀北电力有限公司"]
-    result = client.query_notices(org_id=jibei_id, page=1, page_size=5)
-    print(f"\n[冀北电力] 总记录数: {result.paging.total_count}")
-    print(f"[冀北电力] 总页数: {result.paging.total_pages}")
-    print(f"\n前5条公告:")
-    for n in result.notices:
-        print(f"  [{n.notice_publish_time}] {n.title[:60]}...")
-        print(f"    doctype={n.doctype}, code={n.code}")
-
-    # 测试2：获取日期范围
-    earliest, latest = client.get_date_range(jibei_id, page_size=50)
-    print(f"\n[冀北电力] 数据时间范围: {earliest} ~ {latest}")
-
-    # 测试3：获取全部数据量级
-    no_filter = client.query_notices(page=1, page_size=1)
-    print(f"\n[全平台] 总公告数: {no_filter.paging.total_count}")
-
-    print("\n自测完成!")
+    jibei = ORG_MAP["国网冀北电力有限公司"]
+    r = client.query_notices(org_id=jibei, page=1, page_size=3)
+    print(f"冀北公告: {r.paging.total_count} 条")
+    for n in r.notices:
+        print(f"  [{n.notice_publish_time}] {n.title[:80]}")
+    all_r = client.query_notices(page=1, page_size=1)
+    print(f"全平台: {all_r.paging.total_count} 条")
