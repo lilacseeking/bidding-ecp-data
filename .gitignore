@@ -7,4 +7,6 @@ build/
 venv/
 .env
 data/raw/
+data/downloads/
+data/extracted/
 *.tmp
