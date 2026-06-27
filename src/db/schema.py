@@ -181,6 +181,25 @@ CREATE TABLE IF NOT EXISTS auth_session (
 );
 
 -- ============================================================
+-- 7. 物资需求统计表 (按月汇总)
+-- 数据来源: bid_items + bid_notices 聚合
+-- 相同物资名称 + 单位 + 月份 → 需求量求和
+-- ============================================================
+CREATE TABLE IF NOT EXISTS material_demand_stats (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_name   TEXT NOT NULL,                -- 物资名称 (短名)
+    unit            TEXT NOT NULL,                -- 计量单位
+    demand_month    TEXT NOT NULL,                -- 月份 YYYYMM
+    demand_quantity REAL NOT NULL,                -- 需求量 (求和)
+    notice_count    INTEGER,                      -- 涉及的公告数
+    created_at      TEXT DEFAULT (datetime('now')),
+    UNIQUE(material_name, unit, demand_month)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stats_month ON material_demand_stats(demand_month);
+CREATE INDEX IF NOT EXISTS idx_stats_material ON material_demand_stats(material_name);
+
+-- ============================================================
 -- 视图：冀北物资公告汇总
 -- ============================================================
 CREATE VIEW IF NOT EXISTS v_jibei_material_summary AS
