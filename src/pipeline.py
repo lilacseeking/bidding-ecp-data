@@ -360,54 +360,8 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
 
         print(f"[{i+1}/{len(tasks)}] {task['pub_time']} {title[:55]}...")
 
-        # unzip -UU 能正确提取, 用cmd dir(绝对路径)代替os.walk找XLSX
-        import hashlib
-        dir_hash = hashlib.md5(notice_id.encode()).hexdigest()[:8]
-        extract_subdir = os.path.join(os.path.abspath(EXTRACT_DIR), notice_id + '_' + dir_hash)
-        try:
-            subprocess.run(['cmd','/c','rmdir','/s','/q',extract_subdir], capture_output=True, timeout=10)
-        except: pass
-        os.makedirs(extract_subdir, exist_ok=True)
-
-        subprocess.run(['unzip','-o','-UU',task['zip_path'],'-d',extract_subdir],
-                      capture_output=True, timeout=30)
-
-        # 递归解压嵌套ZIP
-        for _ in range(3):
-            r = subprocess.run(['cmd','/c','dir','/s','/b',
-                os.path.join(extract_subdir,'*.zip')],
-                capture_output=True, text=True, encoding='gbk', errors='replace', timeout=15)
-            zips = [p.strip() for p in r.stdout.split('\n') if p.strip().lower().endswith('.zip')]
-            if not zips: break
-            for zp in zips:
-                try:
-                    if os.path.getsize(zp) < 100: continue
-                    dest = zp.rsplit('.',1)[0]
-                    os.makedirs(dest, exist_ok=True)
-                    subprocess.run(['unzip','-o','-UU',zp,'-d',dest], capture_output=True, timeout=30)
-                    os.remove(zp)
-                except: pass
-
-        # 找货物清单XLSX
-        goods_list_xlsx = None
-        r = subprocess.run(['cmd','/c','dir','/s','/b',
-            os.path.join(extract_subdir,'*.xlsx')],
-            capture_output=True, text=True, encoding='gbk', errors='replace', timeout=15)
-        for line in r.stdout.split('\n'):
-            fp = line.strip()
-            if not fp.lower().endswith('.xlsx'): continue
-            try:
-                if os.path.getsize(fp) <= 0: continue
-                wb = openpyxl.load_workbook(fp, data_only=True)
-                if wb.sheetnames:
-                    ws = wb[wb.sheetnames[0]]
-                    h_row = [str(c.value or '') for c in next(ws.iter_rows(min_row=1, max_row=1))]
-                    if any(sig in h_row for sig in GOODS_LIST_SIGNATURES):
-                        goods_list_xlsx = fp
-                        wb.close()
-                        break
-                wb.close()
-            except: continue
+        # 纯Python内存解压: 递归处理嵌套ZIP, 完全避免文件系统乱码问题
+        goods_list_xlsx = _extract_goods_xlsx_memory(task['zip_path'])
 
         if not goods_list_xlsx:
             print(f"  -> 未找到货物清单XLSX")
@@ -533,6 +487,86 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
     stats['units'] = all_units
     stats['cities'] = all_cities
     return stats
+
+
+def _extract_goods_xlsx_memory(zip_path: str) -> str | None:
+    """
+    纯Python内存解压ZIP, 递归处理嵌套ZIP, 找到货物清单XLSX。
+    完全避免文件系统乱码文件名问题。返回临时XLSX路径或None。
+    """
+    import tempfile, zlib, struct
+
+    def _raw_read(zf, info):
+        """读取ZIP条目, 绕过文件名编码校验, 正确处理deflate"""
+        with open(zf.filename, 'rb') as f:
+            f.seek(info.header_offset + 26)
+            name_len = struct.unpack('<H', f.read(2))[0]
+            extra_len = struct.unpack('<H', f.read(2))[0]
+            f.seek(info.header_offset + 30 + name_len + extra_len)
+            compressed = f.read(info.compress_size)
+        if info.compress_type == zipfile.ZIP_STORED:
+            return compressed
+        elif info.compress_type == zipfile.ZIP_DEFLATED:
+            return zlib.decompress(compressed, -zlib.MAX_WBITS)
+        return compressed
+
+    def _search(zf, depth=0):
+        if depth > 3:
+            return None
+        entries = list(zf.infolist())
+        # 先找XLSX
+        for info in entries:
+            if info.filename.lower().endswith('.xlsx') and info.file_size > 500:
+                try:
+                    data = _raw_read(zf, info)
+                    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+                    if wb.sheetnames:
+                        ws = wb[wb.sheetnames[0]]
+                        h = [str(c.value or '') for c in next(ws.iter_rows(min_row=1, max_row=1))]
+                        if any(sig in h for sig in GOODS_LIST_SIGNATURES):
+                            tmp = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+                            tmp.write(data)
+                            tmp.close()
+                            wb.close()
+                            return tmp.name
+                    wb.close()
+                except Exception:
+                    continue
+        # 再递归嵌套ZIP
+        for info in entries:
+            if info.filename.lower().endswith('.zip') and info.file_size > 100:
+                try:
+                    data = _raw_read(zf, info)
+                    tmpz = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
+                    tmpz.write(data)
+                    tmpz.close()
+                    with zipfile.ZipFile(tmpz.name, 'r') as izf:
+                        result = _search(izf, depth + 1)
+                    try: os.unlink(tmpz.name)
+                    except: pass
+                    if result:
+                        return result
+                except Exception:
+                    continue
+        return None
+
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        return _search(zf)
+
+
+def _find_files(directory: str, suffix: str) -> list[str]:
+    """递归查找指定后缀的文件, 使用os.scandir处理乱码文件名"""
+    result = []
+    try:
+        with os.scandir(directory) as it:
+            for entry in it:
+                if entry.is_file() and entry.name.lower().endswith(suffix):
+                    result.append(os.path.join(directory, entry.name))
+                elif entry.is_dir():
+                    result.extend(_find_files(entry.path, suffix))
+    except (OSError, FileNotFoundError):
+        pass
+    return result
 
 
 def _find_goods_xlsx_in_zip(zip_path: str) -> str | None:
