@@ -79,9 +79,9 @@ graph TB
     E --> F[货物清单下载]
     F --> G[(bid_items<br/>40,773条)]
 
-    style A fill:#009688,color:#fff
-    style E fill:#2196F3,color:#fff
-    style G fill:#4CAF50,color:#fff
+    style A fill:#009688,color:#fff,stroke:#00695C
+    style E fill:#1976D2,color:#fff,stroke:#0D47A1
+    style G fill:#388E3C,color:#fff,stroke:#1B5E20
 ```
 
 ## 安装与运行
@@ -133,20 +133,20 @@ graph TB
     O3["Top5 物资时间序列图<br/>5 子图上下排列"] --> O4
     O4["material_demand_stats.csv<br/>完整统计导出"] --> END([完成])
 
-    style START fill:#009688,color:#fff
-    style P1 fill:#1565C0,color:#fff
-    style P2 fill:#1565C0,color:#fff
-    style P3 fill:#1565C0,color:#fff
-    style P4 fill:#E65100,color:#fff
-    style P4B fill:#FF9800,color:#fff
-    style P4E fill:#FF9800,color:#fff
-    style P4G fill:#9C27B0,color:#fff
-    style P5 fill:#2E7D32,color:#fff
-    style O1 fill:#00695C,color:#fff
-    style O2 fill:#00695C,color:#fff
-    style O3 fill:#C62828,color:#fff
-    style O4 fill:#00695C,color:#fff
-    style END fill:#009688,color:#fff
+    style START fill:#009688,color:#fff,stroke:#00695C
+    style P1 fill:#1565C0,color:#fff,stroke:#0D47A1
+    style P2 fill:#1565C0,color:#fff,stroke:#0D47A1
+    style P3 fill:#1565C0,color:#fff,stroke:#0D47A1
+    style P4 fill:#E65100,color:#fff,stroke:#BF360C
+    style P4B fill:#EF6C00,color:#fff,stroke:#E65100
+    style P4E fill:#EF6C00,color:#fff,stroke:#E65100
+    style P4G fill:#7B1FA2,color:#fff,stroke:#4A148C
+    style P5 fill:#2E7D32,color:#fff,stroke:#1B5E20
+    style O1 fill:#00695C,color:#fff,stroke:#004D40
+    style O2 fill:#00695C,color:#fff,stroke:#004D40
+    style O3 fill:#C62828,color:#fff,stroke:#B71C1C
+    style O4 fill:#00695C,color:#fff,stroke:#004D40
+    style END fill:#009688,color:#fff,stroke:#00695C
 ```
 
 ### Excel 列映射自动检测
@@ -169,10 +169,10 @@ graph LR
     G -->|是| H[逐行解析入库]
     G -->|否| F
 
-    style C fill:#4CAF50,color:#fff
-    style E fill:#2196F3,color:#fff
-    style H fill:#009688,color:#fff
-    style F fill:#F44336,color:#fff
+    style C fill:#388E3C,color:#fff,stroke:#1B5E20
+    style E fill:#1976D2,color:#fff,stroke:#0D47A1
+    style H fill:#009688,color:#fff,stroke:#00695C
+    style F fill:#D32F2F,color:#fff,stroke:#B71C1C
 ```
 
 ## 数据采集时序图
