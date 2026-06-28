@@ -258,23 +258,7 @@ def phase1_collect(conn):
         if cat == "material": material_count += 1
     conn.commit()
 
-    # 也采集中标公告菜单
-    result3 = client.query_all(org_id=TARGET_ORG_ID, page_size=50,
-                                menu_id='2018060501171111')
-    for n in result3.notices:
-        cat = "material" if any(kw in n.title for kw in MATERIAL_KW) else "service"
-        cursor.execute("""INSERT OR IGNORE INTO bid_notices
-            (notice_id,title,code,publish_org_name,org_id,notice_publish_time,
-             notice_type,notice_type_name,doctype,doc_id,doc_url,zbflag,
-             category,bid_batch,bid_year,fetched_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,datetime('now'))""",
-            (n.notice_id,n.title,n.code,n.publish_org_name,n.org_id,
-             n.notice_publish_time,n.notice_type,n.notice_type_name,
-             n.doctype,n.first_page_doc_id,n.doc_url,cat,None,None))
-        if cat == "material": material_count += 1
-    conn.commit()
-
-    print(f"入库: {len(result.notices)}+{len(result2.notices)}+{len(result3.notices)} 条 (物资类: {material_count})")
+    print(f"入库: {len(result.notices)}+{len(result2.notices)} 条 (物资类: {material_count})")
     return material_count
 
 
