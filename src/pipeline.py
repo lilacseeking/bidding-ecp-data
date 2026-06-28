@@ -840,33 +840,51 @@ def _export_delivery():
     ws1 = wb.active
     ws1.title = '招标公告与采购公告'
     c.execute('SELECT id, title, code, notice_type_name, source_file FROM bid_notices ORDER BY notice_publish_time DESC')
-    for col, h in enumerate(['序号','标题','项目编号','公告类型','来源文件'], 1):
+    rows1 = c.fetchall()
+    for col, h in enumerate(['序号','标题','项目编号','公告类型','公告来源','来源文件'], 1):
         c2 = ws1.cell(row=1, column=col, value=h)
         c2.fill = hdr_fill; c2.font = hdr_font
-    for ri, row in enumerate(c, 2):
-        for ci, val in enumerate(row, 1):
+    for ri, row in enumerate(rows1, 2):
+        sid, title, code, ntype, sfile = row
+        # 判断公告来源
+        source = '采购公告' if any(k in (title or '') for k in ['竞争性谈判','零星物资','询价','单一来源']) else '招标公告'
+        for ci, val in enumerate([sid, title, code, ntype, source, sfile], 1):
             ws1.cell(row=ri, column=ci, value=val)
     ws1.column_dimensions['A'].width = 8
-    ws1.column_dimensions['B'].width = 70
-    ws1.column_dimensions['C'].width = 30
+    ws1.column_dimensions['B'].width = 65
+    ws1.column_dimensions['C'].width = 28
     ws1.column_dimensions['D'].width = 15
-    ws1.column_dimensions['E'].width = 40
+    ws1.column_dimensions['E'].width = 10
+    ws1.column_dimensions['F'].width = 38
     ws1.freeze_panes = 'A2'
 
-    # Sheet2: 招标物资明细表
+    # Sheet2: 招标物资明细表 (material_demand_item + source_file from bid_items)
     ws2 = wb.create_sheet('招标物资明细表')
-    c.execute('SELECT id, material_name, unit, demand_month, demand_quantity, notice_count FROM material_demand_item ORDER BY demand_month, material_name')
-    for col, h in enumerate(['序号','物资名称','单位','月份','需求量','公告数'], 1):
+    c.execute("""SELECT m.id, m.material_name, m.unit, m.demand_month, m.demand_quantity,
+                        b.source_file
+                 FROM material_demand_item m
+                 LEFT JOIN (
+                     SELECT CASE WHEN material_name LIKE '%,%'
+                              THEN substr(material_name, 1, instr(material_name, ',') - 1)
+                              ELSE material_name END as short_name,
+                         unit, MIN(source_file) as source_file
+                     FROM bid_items WHERE source_file IS NOT NULL
+                     GROUP BY 1, 2
+                 ) b ON b.short_name = m.material_name AND b.unit = m.unit
+                 ORDER BY m.demand_month, m.material_name""")
+    rows2 = c.fetchall()
+    for col, h in enumerate(['序号','物资名称','单位','月份','需求量','来源文件'], 1):
         c2 = ws2.cell(row=1, column=col, value=h)
         c2.fill = hdr_fill; c2.font = hdr_font
-    for ri, row in enumerate(c, 2):
+    for ri, row in enumerate(rows2, 2):
         for ci, val in enumerate(row, 1):
             ws2.cell(row=ri, column=ci, value=val)
     ws2.column_dimensions['A'].width = 8
-    ws2.column_dimensions['B'].width = 60
+    ws2.column_dimensions['B'].width = 55
     ws2.column_dimensions['C'].width = 10
     ws2.column_dimensions['D'].width = 12
     ws2.column_dimensions['E'].width = 12
+    ws2.column_dimensions['F'].width = 40
     ws2.freeze_panes = 'A2'
 
     # Sheet3: 招标物资统计表
