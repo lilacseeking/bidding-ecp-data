@@ -467,23 +467,7 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
 
         conn.commit()
 
-        # 入库项目单位
-        orgs_seen = set()
-        for item in items:
-            for key in ('project_org_name', 'demand_org_name'):
-                name = item.get(key)
-                if name and name not in orgs_seen:
-                    orgs_seen.add(name)
-                    city = extract_city(name)
-                    cursor.execute("""
-                        INSERT OR IGNORE INTO org_units
-                            (parent_org_id, parent_org_name, org_name, city, province,
-                             first_seen_notice_id, first_seen_date)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (TARGET_ORG_ID, "国网冀北电力有限公司", name,
-                          city, "河北省" if city and city != "北京" else "北京市",
-                          notice_id, task['pub_time']))
-        conn.commit()
+
 
         # 标记解析成功
         cursor.execute("""
@@ -496,7 +480,7 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
 
         stats['success'] += 1
         stats['total_items'] += len(items)
-        print(f"  -> {inserted}/{len(items)} 条, {len(orgs_seen)} 单位"
+        print(f"  -> {inserted}/{len(items)} 条"
               f" (Excel: {excel_name})")
         if parse_errors:
             print(f"  -> ⚠️ {len(parse_errors)} 个警告: {parse_errors[:2]}")
@@ -716,23 +700,7 @@ def phase5_verify(conn):
     cursor.execute("SELECT COUNT(*) FROM bid_items")
     total_items = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM org_units")
-    org_count = cursor.fetchone()[0]
-
-    # 城市维度
-    cursor.execute("""
-        SELECT o.city, COUNT(DISTINCT i.notice_id), COUNT(i.id)
-        FROM bid_items i
-        JOIN org_units o ON i.project_org_name = o.org_name
-        WHERE o.city IS NOT NULL
-        GROUP BY o.city ORDER BY COUNT(i.id) DESC
-    """)
-    city_stats = cursor.fetchall()
-
-    print(f"\n总明细: {total_items} 条 | 单位: {org_count} 个")
-    print(f"城市分布:")
-    for city, nc, ic in city_stats:
-        print(f"  {city}: {ic} 条, {nc} 公告")
+    print(f"\n总明细: {total_items} 条")
 
     # 失败记录
     if os.path.exists(FAILED_LOG):
@@ -746,7 +714,7 @@ def phase5_verify(conn):
         'total_material': total_material,
         'parsed': status_dist.get('parsed', 0),
         'with_items': with_items, 'pending': len(pending),
-        'total_items': total_items, 'org_count': org_count,
+        'total_items': total_items,
         'status_dist': status_dist,
         'failed': len(json.load(open(FAILED_LOG, encoding='utf-8')))
                   if os.path.exists(FAILED_LOG) else 0,
@@ -788,7 +756,7 @@ def main():
     print(f"{'='*60}")
     sd = result.get('status_dist', {})
     print(f"物资公告: {result['total_material']} | parsed={sd.get('parsed',0)} downloaded={sd.get('downloaded',0)} no_file={sd.get('no_file',0)} failed={sd.get('parse_failed',0)} pending={sd.get('pending',0)}")
-    print(f"物资明细: {result['total_items']} | 单位: {result['org_count']}")
+    print(f"物资明细: {result['total_items']}")
 
     # --- 自动更新所有产物 ---
     _update_all_outputs()
@@ -803,7 +771,7 @@ def _update_all_outputs():
     try:
         subprocess.run([sys.executable, os.path.join(PROJECT_ROOT, 'src', 'demand_stats.py')],
                       timeout=120, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        print("  [OK] material_demand_stats + 图表")
+        print("  [OK] material_demand_item + 图表")
     except Exception as e:
         print(f"  [SKIP] demand_stats: {e}")
 
@@ -822,7 +790,7 @@ def _update_all_outputs():
         os.makedirs(os.path.dirname(out), exist_ok=True)
         conn3 = sqlite3.connect(DB_PATH)
         c3 = conn3.cursor()
-        c3.execute('SELECT material_name, unit, demand_month, demand_quantity, notice_count FROM material_demand_stats ORDER BY demand_month, material_name')
+        c3.execute('SELECT material_name, unit, demand_month, demand_quantity, notice_count FROM material_demand_item ORDER BY demand_month, material_name')
         rows = c3.fetchall()
         conn3.close()
 
@@ -847,8 +815,79 @@ def _update_all_outputs():
     except Exception as e:
         print(f"  [SKIP] 物资需求统计: {e}")
 
+    # 4. 交付文件 (3 Sheet: 公告 + 物资明细 + 物资统计)
+    try:
+        _export_delivery()
+        print("  [OK] 冀北电力物资采购数据.xlsx")
+    except Exception as e:
+        print(f"  [SKIP] 交付文件: {e}")
+
     print(f"\n数据库: {DB_PATH}")
     print(f"完成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+
+def _export_delivery():
+    """生成交付文件: 3 Sheet Excel"""
+    from openpyxl.styles import Font, PatternFill
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+
+    wb = openpyxl.Workbook()
+    hdr_fill = PatternFill(start_color='009688', end_color='009688', fill_type='solid')
+    hdr_font = Font(color='FFFFFF', bold=True, size=11)
+
+    # Sheet1: 招标公告与采购公告
+    ws1 = wb.active
+    ws1.title = '招标公告与采购公告'
+    c.execute('SELECT id, title, code, notice_type_name, source_file FROM bid_notices ORDER BY notice_publish_time DESC')
+    for col, h in enumerate(['序号','标题','项目编号','公告类型','来源文件'], 1):
+        c2 = ws1.cell(row=1, column=col, value=h)
+        c2.fill = hdr_fill; c2.font = hdr_font
+    for ri, row in enumerate(c, 2):
+        for ci, val in enumerate(row, 1):
+            ws1.cell(row=ri, column=ci, value=val)
+    ws1.column_dimensions['A'].width = 8
+    ws1.column_dimensions['B'].width = 70
+    ws1.column_dimensions['C'].width = 30
+    ws1.column_dimensions['D'].width = 15
+    ws1.column_dimensions['E'].width = 40
+    ws1.freeze_panes = 'A2'
+
+    # Sheet2: 招标物资明细表
+    ws2 = wb.create_sheet('招标物资明细表')
+    c.execute('SELECT id, material_name, unit, demand_month, demand_quantity, notice_count FROM material_demand_item ORDER BY demand_month, material_name')
+    for col, h in enumerate(['序号','物资名称','单位','月份','需求量','公告数'], 1):
+        c2 = ws2.cell(row=1, column=col, value=h)
+        c2.fill = hdr_fill; c2.font = hdr_font
+    for ri, row in enumerate(c, 2):
+        for ci, val in enumerate(row, 1):
+            ws2.cell(row=ri, column=ci, value=val)
+    ws2.column_dimensions['A'].width = 8
+    ws2.column_dimensions['B'].width = 60
+    ws2.column_dimensions['C'].width = 10
+    ws2.column_dimensions['D'].width = 12
+    ws2.column_dimensions['E'].width = 12
+    ws2.freeze_panes = 'A2'
+
+    # Sheet3: 招标物资统计表
+    ws3 = wb.create_sheet('招标物资统计表')
+    c.execute('SELECT id, material_name, demand_month, demand_quantity, notice_count FROM material_demand_total ORDER BY demand_month, material_name')
+    for col, h in enumerate(['序号','物资名称','月份','需求量','公告数'], 1):
+        c2 = ws3.cell(row=1, column=col, value=h)
+        c2.fill = hdr_fill; c2.font = hdr_font
+    for ri, row in enumerate(c, 2):
+        for ci, val in enumerate(row, 1):
+            ws3.cell(row=ri, column=ci, value=val)
+    ws3.column_dimensions['A'].width = 8
+    ws3.column_dimensions['B'].width = 60
+    ws3.column_dimensions['C'].width = 12
+    ws3.column_dimensions['D'].width = 12
+    ws3.freeze_panes = 'A2'
+
+    out = os.path.join(PROJECT_ROOT, 'outputs', '冀北电力物资采购数据.xlsx')
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    wb.save(out)
+    conn.close()
 
 
 def _export_unprocessed():

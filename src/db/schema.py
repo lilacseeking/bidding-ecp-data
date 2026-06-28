@@ -4,8 +4,8 @@ SQLite 数据库表结构定义
 表：
 - bid_notices: 公告主表 (noteList API)
 - bid_items: 物资明细表 (货物清单Excel)
-- org_units: 项目单位表 (子公司/供电公司)
-- material_demand_stats: 物资需求统计表 (按月汇总)
+- material_demand_item: 物资需求明细表 (按月汇总, 保留单位维度)
+- material_demand_total: 物资需求总计表 (按月汇总, 跨单位求和)
 """
 import sqlite3
 import os
@@ -16,15 +16,13 @@ CLEANUP_SQL = """
 DROP TABLE IF EXISTS auth_session;
 DROP TABLE IF EXISTS crawl_log;
 DROP TABLE IF EXISTS notice_attachments;
+DROP TABLE IF EXISTS org_units;
+DROP TABLE IF EXISTS material_demand_stats;
 DROP VIEW IF EXISTS v_jibei_material_summary;
 DROP VIEW IF EXISTS v_jibei_subsidiary_freq;
 """
 
 SCHEMA_SQL = """
--- ============================================================
--- 1. 公告主表
--- 数据来源: noteList API
--- ============================================================
 CREATE TABLE IF NOT EXISTS bid_notices (
     id              INTEGER PRIMARY KEY,
     notice_id       TEXT NOT NULL UNIQUE,
@@ -51,16 +49,11 @@ CREATE TABLE IF NOT EXISTS bid_notices (
     created_at      TEXT DEFAULT (datetime('now')),
     updated_at      TEXT DEFAULT (datetime('now'))
 );
-
 CREATE INDEX IF NOT EXISTS idx_notices_org_id ON bid_notices(org_id);
 CREATE INDEX IF NOT EXISTS idx_notices_publish_time ON bid_notices(notice_publish_time);
 CREATE INDEX IF NOT EXISTS idx_notices_category ON bid_notices(category);
 CREATE INDEX IF NOT EXISTS idx_notices_bid_year ON bid_notices(bid_year);
 
--- ============================================================
--- 2. 物资明细表
--- 数据来源: 货物清单Excel
--- ============================================================
 CREATE TABLE IF NOT EXISTS bid_items (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     notice_id       TEXT NOT NULL,
@@ -86,39 +79,15 @@ CREATE TABLE IF NOT EXISTS bid_items (
     source_file     TEXT,
     created_at      TEXT DEFAULT (datetime('now'))
 );
-
 CREATE INDEX IF NOT EXISTS idx_items_notice_id ON bid_items(notice_id);
 CREATE INDEX IF NOT EXISTS idx_items_material_name ON bid_items(material_name);
-CREATE INDEX IF NOT EXISTS idx_items_sub_bid ON bid_items(sub_bid_name);
-CREATE INDEX IF NOT EXISTS idx_items_project_org ON bid_items(project_org_name);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_items_unique ON bid_items(
     notice_id, COALESCE(sub_bid_code,''), COALESCE(sub_bid_name,''),
     COALESCE(package_no,''), COALESCE(material_name,'')
 );
 
--- ============================================================
--- 3. 项目单位表
--- ============================================================
-CREATE TABLE IF NOT EXISTS org_units (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    parent_org_id   TEXT,
-    parent_org_name TEXT,
-    org_name        TEXT NOT NULL,
-    org_level       TEXT,
-    city            TEXT,
-    province        TEXT,
-    first_seen_notice_id TEXT,
-    first_seen_date TEXT,
-    created_at      TEXT DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_org_units_parent ON org_units(parent_org_id);
-CREATE INDEX IF NOT EXISTS idx_org_units_name ON org_units(org_name);
-
--- ============================================================
--- 4. 物资需求统计表 (按月汇总)
--- ============================================================
-CREATE TABLE IF NOT EXISTS material_demand_stats (
+-- 物资需求明细: 按物资+单位+月份汇总
+CREATE TABLE IF NOT EXISTS material_demand_item (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     material_name   TEXT NOT NULL,
     unit            TEXT NOT NULL,
@@ -128,9 +97,21 @@ CREATE TABLE IF NOT EXISTS material_demand_stats (
     created_at      TEXT DEFAULT (datetime('now')),
     UNIQUE(material_name, unit, demand_month)
 );
+CREATE INDEX IF NOT EXISTS idx_mdi_month ON material_demand_item(demand_month);
+CREATE INDEX IF NOT EXISTS idx_mdi_material ON material_demand_item(material_name);
 
-CREATE INDEX IF NOT EXISTS idx_stats_month ON material_demand_stats(demand_month);
-CREATE INDEX IF NOT EXISTS idx_stats_material ON material_demand_stats(material_name);
+-- 物资需求总计: 按物资+月份汇总 (跨单位求和)
+CREATE TABLE IF NOT EXISTS material_demand_total (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_name   TEXT NOT NULL,
+    demand_month    TEXT NOT NULL,
+    demand_quantity REAL NOT NULL,
+    notice_count    INTEGER,
+    created_at      TEXT DEFAULT (datetime('now')),
+    UNIQUE(material_name, demand_month)
+);
+CREATE INDEX IF NOT EXISTS idx_mdt_month ON material_demand_total(demand_month);
+CREATE INDEX IF NOT EXISTS idx_mdt_material ON material_demand_total(material_name);
 """
 
 

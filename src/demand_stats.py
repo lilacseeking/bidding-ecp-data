@@ -1,7 +1,7 @@
 """
 物资需求统计 + Top5物资时间序列绘图
 
-1. 从 bid_items 聚合 → material_demand_stats (物资名+单位+月份 → 需求量求和)
+1. 从 bid_items 聚合 → material_demand_item (物资名+单位+月份 → 需求量求和)
 2. 找月份分布最多的 Top5 物资
 3. 绘制 5 个子图上下排列的时间序列
 
@@ -49,15 +49,15 @@ def short_name(raw: str) -> str:
 
 
 def build_demand_stats(conn):
-    """从 bid_items 聚合生成 material_demand_stats"""
+    """从 bid_items 聚合生成 material_demand_item"""
     c = conn.cursor()
 
     # 清理旧数据
-    c.execute("DELETE FROM material_demand_stats")
+    c.execute("DELETE FROM material_demand_item")
 
     # 聚合: 物资简称 + 单位 + 月份(YYYYMM) → SUM(需求量)
     c.execute("""
-        INSERT OR REPLACE INTO material_demand_stats
+        INSERT OR REPLACE INTO material_demand_item
             (material_name, unit, demand_month, demand_quantity, notice_count)
         SELECT
             CASE WHEN i.material_name LIKE '%,%'
@@ -76,8 +76,20 @@ def build_demand_stats(conn):
     """)
     conn.commit()
 
-    c.execute("SELECT COUNT(*) FROM material_demand_stats")
-    print(f"material_demand_stats: {c.fetchone()[0]} 条记录")
+    # 聚合生成 material_demand_total (跨单位求和)
+    c.execute("DELETE FROM material_demand_total")
+    c.execute("""
+        INSERT OR REPLACE INTO material_demand_total
+            (material_name, demand_month, demand_quantity, notice_count)
+        SELECT material_name, demand_month, SUM(demand_quantity) as total_qty,
+               MAX(notice_count)
+        FROM material_demand_item
+        GROUP BY material_name, demand_month
+    """)
+    conn.commit()
+
+    c.execute("SELECT COUNT(*) FROM material_demand_item")
+    print(f"material_demand_item: {c.fetchone()[0]} 条记录")
 
 
 def get_top5_materials(conn) -> list[tuple]:
@@ -86,7 +98,7 @@ def get_top5_materials(conn) -> list[tuple]:
     c.execute("""
         SELECT material_name, unit, COUNT(DISTINCT demand_month) as month_cnt,
                SUM(demand_quantity) as total_qty
-        FROM material_demand_stats
+        FROM material_demand_item
         GROUP BY material_name, unit
         ORDER BY month_cnt DESC
         LIMIT 5
@@ -111,7 +123,7 @@ def plot_top5(conn, top5: list[tuple]):
         # 查询该物资的月度数据
         c.execute("""
             SELECT demand_month, demand_quantity
-            FROM material_demand_stats
+            FROM material_demand_item
             WHERE material_name = ? AND unit = ?
             ORDER BY demand_month
         """, (mat_name, unit))
@@ -192,7 +204,7 @@ def main():
     os.makedirs(os.path.dirname(xlsx_path), exist_ok=True)
     c = conn.cursor()
     c.execute("""SELECT material_name, unit, demand_month, demand_quantity, notice_count
-        FROM material_demand_stats ORDER BY demand_month, material_name""")
+        FROM material_demand_item ORDER BY demand_month, material_name""")
     rows = c.fetchall()
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment
