@@ -56,7 +56,7 @@ bidding-ecp-data/
 ### 三类公告数据源
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#009688', 'primaryTextColor': '#fff', 'primaryBorderColor': '#006f6b', 'lineColor': '#4db6ac', 'secondaryColor': '#e0f2f1', 'tertiaryColor': '#f5f5f5'}}}%%
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#009688', 'primaryBorderColor': '#006f6b', 'lineColor': '#4db6ac', 'secondaryColor': '#e0f2f1', 'tertiaryColor': '#f5f5f5'}}}%%
 graph TB
     A[ECP2.0 平台] --> B[招标公告<br/>2018032700291334<br/>401条]
     A --> C[中标公告<br/>2018060501171111<br/>392条]
@@ -152,7 +152,7 @@ graph TB
 ### Excel 列映射自动检测
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#E65100', 'primaryTextColor': '#fff', 'lineColor': '#FF9800'}}}%%
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#E65100', 'lineColor': '#FF9800'}}}%%
 graph LR
     A[读取Sheet首行] --> B{表头含<br/>物资名称?}
     B -->|是 格式1| C[招标公告货物清单<br/>23列/27列]
@@ -178,7 +178,7 @@ graph LR
 ## 数据采集时序图
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#009688', 'primaryTextColor': '#fff'}}}%%
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#009688'}}}%%
 sequenceDiagram
     autonumber
     participant P as Pipeline
@@ -241,7 +241,7 @@ sequenceDiagram
 ## 数据表结构
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#1565C0', 'primaryTextColor': '#fff', 'lineColor': '#42A5F5'}}}%%
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#1565C0', 'lineColor': '#42A5F5'}}}%%
 erDiagram
     bid_notices ||--o{ bid_items : "notice_id"
     bid_items }o--|| org_units : "project_org_name"
@@ -297,7 +297,7 @@ erDiagram
 ## excel_status 状态流转
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#009688', 'primaryTextColor': '#fff'}}}%%
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#009688'}}}%%
 stateDiagram-v2
     [*] --> pending: 公告入库
 
