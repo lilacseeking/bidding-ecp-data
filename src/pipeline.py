@@ -33,8 +33,8 @@ from db.schema import init_db, get_connection
 TARGET_ORG_ID = ORG_MAP["国网冀北电力有限公司"]
 DOWNLOAD_URL = "https://ecp.sgcc.com.cn/ecp2.0/ecpwcmcore//index/downLoadBid"
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-EXCEL_DIR = os.path.join(PROJECT_ROOT, "data", "excels")
-EXTRACT_DIR = os.path.join(PROJECT_ROOT, "data", "extracted")
+ZIP_DIR = os.path.join(PROJECT_ROOT, "data", "excels", "zip")
+XLSX_DIR = os.path.join(PROJECT_ROOT, "data", "excels", "xlsx")
 DB_PATH = os.path.join(PROJECT_ROOT, "data", "ecp_data.db")
 FAILED_LOG = os.path.join(PROJECT_ROOT, "data", "failed_parse.json")
 
@@ -256,7 +256,8 @@ def phase3_download(conn, full_mode: bool = False) -> list[dict]:
                for r in cursor]
     print(f"物资正刊公告: {len(notices)} 条")
 
-    os.makedirs(EXCEL_DIR, exist_ok=True)
+    os.makedirs(ZIP_DIR, exist_ok=True)
+    os.makedirs(XLSX_DIR, exist_ok=True)
     tasks = []
     new_downloads = 0
 
@@ -271,7 +272,7 @@ def phase3_download(conn, full_mode: bool = False) -> list[dict]:
         else:
             zip_name = code
 
-        zip_path = os.path.join(EXCEL_DIR, f"{zip_name}.zip")
+        zip_path = os.path.join(ZIP_DIR, f"{zip_name}.zip")
 
         if os.path.exists(zip_path) and os.path.getsize(zip_path) > 1000:
             tasks.append({**n, 'zip_path': zip_path, 'zip_name': zip_name, 'status': 'exists'})
@@ -326,7 +327,6 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
     print("=" * 60)
 
     cursor = conn.cursor()
-    os.makedirs(EXTRACT_DIR, exist_ok=True)
     load_hardcoded_fixes()
 
     stats = {'success': 0, 'failed': 0, 'skipped': 0, 'total_items': 0}
@@ -376,7 +376,7 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
 
         # 保存Excel到 data/excels (goods_list_xlsx是临时文件)
         excel_name = task['zip_name'] + ".xlsx"
-        saved_excel = os.path.join(EXCEL_DIR, excel_name)
+        saved_excel = os.path.join(XLSX_DIR, excel_name)
         shutil.copy2(goods_list_xlsx, saved_excel)
         try:
             os.unlink(goods_list_xlsx)  # 删除临时文件
@@ -463,10 +463,10 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
         # 标记解析成功
         cursor.execute("""
             UPDATE bid_notices
-            SET excel_status='parsed', excel_path=?, detail_fetched=1,
-                detail_fetched_at=datetime('now')
+            SET excel_status='parsed', excel_path=?, source_file=?,
+                detail_fetched=1, detail_fetched_at=datetime('now')
             WHERE notice_id=?
-        """, (excel_name, notice_id))
+        """, (saved_excel, excel_name, notice_id))
         conn.commit()
 
         stats['success'] += 1
@@ -553,126 +553,6 @@ def _extract_goods_xlsx_memory(zip_path: str) -> str | None:
     with zipfile.ZipFile(zip_path, 'r') as zf:
         return _search(zf)
 
-
-def _find_files(directory: str, suffix: str) -> list[str]:
-    """递归查找指定后缀的文件, 使用os.scandir处理乱码文件名"""
-    result = []
-    try:
-        with os.scandir(directory) as it:
-            for entry in it:
-                if entry.is_file() and entry.name.lower().endswith(suffix):
-                    result.append(os.path.join(directory, entry.name))
-                elif entry.is_dir():
-                    result.extend(_find_files(entry.path, suffix))
-    except (OSError, FileNotFoundError):
-        pass
-    return result
-
-
-def _find_goods_xlsx_in_zip(zip_path: str) -> str | None:
-    """
-    纯Python内存解压ZIP, 递归处理嵌套ZIP, 找到货物清单XLSX。
-    使用monkey-patch绕过zipfile的文件名编码校验。
-    """
-    import tempfile, zlib, struct
-
-    # Monkey-patch: 绕过文件名编码校验
-    _original_open = zipfile.ZipFile.open
-    def _patched_open(self, name, mode='r', *args, **kwargs):
-        if isinstance(name, zipfile.ZipInfo):
-            info = name
-        else:
-            info = self.getinfo(name)
-        # 直接用header_offset读取原始字节, 跳过文件名校验
-        with open(self.filename, 'rb') as raw_f:
-            raw_f.seek(info.header_offset)
-            sig = raw_f.read(4)
-            if sig != b'PK\x03\x04':
-                raise zipfile.BadZipFile('Bad local header')
-            raw_f.read(22)
-            comp_size = struct.unpack('<I', raw_f.read(4))[0]
-            uncomp_size = struct.unpack('<I', raw_f.read(4))[0]
-            name_len = struct.unpack('<H', raw_f.read(2))[0]
-            extra_len = struct.unpack('<H', raw_f.read(2))[0]
-            raw_f.seek(name_len + extra_len, 1)
-            raw = raw_f.read(comp_size)
-        if comp_size == uncomp_size:
-            return io.BytesIO(raw)
-        return io.BytesIO(zlib.decompress(raw, -15))
-
-    zipfile.ZipFile.open = _patched_open
-
-    def _extract_and_find(fp: str, depth: int = 0) -> str | None:
-        if depth > 3:
-            return None
-        try:
-            with zipfile.ZipFile(fp, 'r') as zf:
-                for info in list(zf.infolist()):
-                    name_lower = info.filename.lower()
-                    if name_lower.endswith('.xlsx') and info.file_size > 500:
-                        try:
-                            xlsx_data = zf.read(info)
-                            wb = openpyxl.load_workbook(io.BytesIO(xlsx_data), data_only=True)
-                            if wb.sheetnames:
-                                ws = wb[wb.sheetnames[0]]
-                                h_row = [str(c.value or '') for c in
-                                         next(ws.iter_rows(min_row=1, max_row=1))]
-                                if any(sig in h_row for sig in GOODS_LIST_SIGNATURES):
-                                    tmp = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
-                                    tmp.write(xlsx_data)
-                                    tmp.close()
-                                    wb.close()
-                                    return tmp.name
-                            wb.close()
-                        except Exception:
-                            continue
-                for info in list(zf.infolist()):
-                    name_lower = info.filename.lower()
-                    if name_lower.endswith('.zip') and info.file_size > 100:
-                        try:
-                            inner_data = zf.read(info)
-                            tmp_zip = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
-                            tmp_zip.write(inner_data)
-                            tmp_zip.close()
-                            result = _extract_and_find(tmp_zip.name, depth + 1)
-                            try: os.unlink(tmp_zip.name)
-                            except: pass
-                            if result:
-                                return result
-                        except Exception:
-                            continue
-        except Exception:
-            pass
-        return None
-
-    result = _extract_and_find(zip_path)
-    zipfile.ZipFile.open = _original_open  # restore
-    return result
-
-
-def _extract_nested_zips(directory: str):
-    """递归解压目录中的嵌套ZIP文件 (处理ZIP内含ZIP的情况)
-    使用cmd dir命令替代os.walk以避免乱码文件名问题"""
-    extracted_any = True
-    while extracted_any:
-        extracted_any = False
-        # 用dir /s /b找所有ZIP文件 (避免os.walk乱码)
-        result = subprocess.run(
-            ['cmd', '/c', 'dir', '/s', '/b', os.path.join(directory, '*.zip')],
-            capture_output=True, text=True, timeout=15, encoding='gbk', errors='replace')
-        zip_paths = [p.strip() for p in result.stdout.split('\n') if p.strip().lower().endswith('.zip')]
-        for fp in zip_paths:
-            try:
-                if os.path.getsize(fp) < 100:
-                    continue
-                dest = fp.rsplit('.', 1)[0]
-                os.makedirs(dest, exist_ok=True)
-                subprocess.run(['unzip', '-o', '-UU', fp, '-d', dest],
-                              capture_output=True, timeout=30)
-                os.remove(fp)
-                extracted_any = True
-            except Exception:
-                pass
 
 
 def parse_goods_list(notice_id: str, xlsx_path: str) -> tuple[list[dict], list[str]]:

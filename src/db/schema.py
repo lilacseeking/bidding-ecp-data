@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS bid_notices (
     detail_fetched  INTEGER DEFAULT 0,
     detail_fetched_at TEXT,
     excel_path      TEXT,
+    source_file     TEXT,
     excel_status    TEXT DEFAULT 'pending',
     created_at      TEXT DEFAULT (datetime('now')),
     updated_at      TEXT DEFAULT (datetime('now'))
