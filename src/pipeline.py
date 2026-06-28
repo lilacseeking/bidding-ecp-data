@@ -233,7 +233,48 @@ def phase1_collect(conn):
             material_count += 1
 
     conn.commit()
-    print(f"入库: {len(result.notices)} 条 (物资类: {material_count})")
+
+    # 同时采集采购公告菜单 (竞争性谈判/零星物资框架等)
+    result2 = client.query_all(org_id=TARGET_ORG_ID, page_size=50,
+                                menu_id='2018032900295987')
+    for n in result2.notices:
+        cat = "material" if any(kw in n.title for kw in MATERIAL_KW) else "service"
+        if n.doctype == 'doc-spec':
+            cat = "other"
+        batch = ""
+        m = re.search(r"第([一二三四五六七八九十\d]+)次", n.title)
+        if m: batch = f"第{m.group(1)}次"
+        year = None
+        m = re.search(r"(20\d{2})", n.title)
+        if m: year = int(m.group(1))
+        cursor.execute("""INSERT OR IGNORE INTO bid_notices
+            (notice_id,title,code,publish_org_name,org_id,notice_publish_time,
+             notice_type,notice_type_name,doctype,doc_id,doc_url,zbflag,
+             category,bid_batch,bid_year,fetched_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,datetime('now'))""",
+            (n.notice_id,n.title,n.code,n.publish_org_name,n.org_id,
+             n.notice_publish_time,n.notice_type,n.notice_type_name,
+             n.doctype,n.first_page_doc_id,n.doc_url,cat,batch,year))
+        if cat == "material": material_count += 1
+    conn.commit()
+
+    # 也采集中标公告菜单
+    result3 = client.query_all(org_id=TARGET_ORG_ID, page_size=50,
+                                menu_id='2018060501171111')
+    for n in result3.notices:
+        cat = "material" if any(kw in n.title for kw in MATERIAL_KW) else "service"
+        cursor.execute("""INSERT OR IGNORE INTO bid_notices
+            (notice_id,title,code,publish_org_name,org_id,notice_publish_time,
+             notice_type,notice_type_name,doctype,doc_id,doc_url,zbflag,
+             category,bid_batch,bid_year,fetched_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,datetime('now'))""",
+            (n.notice_id,n.title,n.code,n.publish_org_name,n.org_id,
+             n.notice_publish_time,n.notice_type,n.notice_type_name,
+             n.doctype,n.first_page_doc_id,n.doc_url,cat,None,None))
+        if cat == "material": material_count += 1
+    conn.commit()
+
+    print(f"入库: {len(result.notices)}+{len(result2.notices)}+{len(result3.notices)} 条 (物资类: {material_count})")
     return material_count
 
 
@@ -785,26 +826,42 @@ def _update_all_outputs():
     # 2. 未处理公告Excel
     try:
         _export_unprocessed()
-        print("  [OK] unprocessed_notices.xlsx")
+        print("  [OK] 未处理公告.xlsx")
     except Exception as e:
         print(f"  [SKIP] unprocessed: {e}")
 
-    # 3. CSV导出
+    # 3. 物资需求统计Excel导出
     try:
-        import csv
-        out = os.path.join(PROJECT_ROOT, 'outputs', 'material_demand_stats.csv')
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        out = os.path.join(PROJECT_ROOT, 'outputs', '物资需求统计.xlsx')
         os.makedirs(os.path.dirname(out), exist_ok=True)
         conn3 = sqlite3.connect(DB_PATH)
         c3 = conn3.cursor()
         c3.execute('SELECT material_name, unit, demand_month, demand_quantity, notice_count FROM material_demand_stats ORDER BY demand_month, material_name')
-        with open(out, 'w', encoding='utf-8-sig', newline='') as f:
-            w = csv.writer(f)
-            w.writerow(['material_name','unit','demand_month','demand_quantity','notice_count'])
-            w.writerows(c3)
+        rows = c3.fetchall()
         conn3.close()
-        print(f"  [OK] material_demand_stats.csv")
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = '物资需求统计'
+        hdr_fill = PatternFill(start_color='009688', end_color='009688', fill_type='solid')
+        hdr_font = Font(color='FFFFFF', bold=True)
+        for col, h in enumerate(['物资名称', '单位', '月份(YYYYMM)', '需求量', '公告数'], 1):
+            c = ws.cell(row=1, column=col, value=h)
+            c.fill = hdr_fill; c.font = hdr_font
+            c.alignment = Alignment(horizontal='center')
+        for ri, row in enumerate(rows, 2):
+            for ci, val in enumerate(row, 1):
+                ws.cell(row=ri, column=ci, value=val)
+        ws.column_dimensions['A'].width = 50
+        ws.column_dimensions['C'].width = 15
+        ws.freeze_panes = 'A2'
+        ws.auto_filter.ref = ws.dimensions
+        wb.save(out)
+        print(f"  [OK] 物资需求统计.xlsx ({len(rows)} 行)")
     except Exception as e:
-        print(f"  [SKIP] CSV: {e}")
+        print(f"  [SKIP] 物资需求统计: {e}")
 
     print(f"\n数据库: {DB_PATH}")
     print(f"完成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -872,7 +929,7 @@ def _export_unprocessed():
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     ws.freeze_panes = 'A2'
 
-    out = os.path.join(PROJECT_ROOT, 'data', 'unprocessed_notices.xlsx')
+    out = os.path.join(PROJECT_ROOT, 'data', '未处理公告.xlsx')
     wb.save(out)
 
 

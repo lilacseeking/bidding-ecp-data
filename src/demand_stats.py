@@ -158,7 +158,7 @@ def plot_top5(conn, top5: list[tuple]):
     axes[-1].set_xlabel('时间 (月)', fontsize=12)
 
     plt.tight_layout(rect=[0, 0, 1, 0.98])
-    output_path = os.path.join(OUTPUT_DIR, 'material_demand_top5_monthly.png')
+    output_path = os.path.join(OUTPUT_DIR, '物资需求Top5月度趋势.png')
     fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
     print(f'\n图表已保存: {output_path}')
@@ -187,21 +187,30 @@ def main():
     if top5:
         plot_top5(conn, top5)
 
-    # Step 4: 导出统计CSV
-    csv_path = os.path.join(os.path.dirname(__file__), "..", "outputs",
-                            "material_demand_stats.csv")
-    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    # Step 4: 导出统计Excel
+    xlsx_path = os.path.join(os.path.dirname(__file__), "..", "outputs", "物资需求统计.xlsx")
+    os.makedirs(os.path.dirname(xlsx_path), exist_ok=True)
     c = conn.cursor()
-    c.execute("""
-        SELECT material_name, unit, demand_month, demand_quantity, notice_count
-        FROM material_demand_stats ORDER BY demand_month, material_name
-    """)
-    import csv
-    with open(csv_path, 'w', encoding='utf-8-sig', newline='') as f:
-        w = csv.writer(f)
-        w.writerow(['material_name', 'unit', 'demand_month', 'demand_quantity', 'notice_count'])
-        w.writerows(c)
-    print(f"\nCSV导出: {csv_path} ({c.execute('SELECT COUNT(*) FROM material_demand_stats').fetchone()[0]} 行)")
+    c.execute("""SELECT material_name, unit, demand_month, demand_quantity, notice_count
+        FROM material_demand_stats ORDER BY demand_month, material_name""")
+    rows = c.fetchall()
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    wb2 = openpyxl.Workbook()
+    ws2 = wb2.active
+    ws2.title = '物资需求统计'
+    hdr_f = PatternFill(start_color='009688', end_color='009688', fill_type='solid')
+    for col, h in enumerate(['物资名称','单位','月份','需求量','公告数'], 1):
+        c2 = ws2.cell(row=1, column=col, value=h)
+        c2.fill = hdr_f; c2.font = Font(color='FFFFFF', bold=True)
+        c2.alignment = Alignment(horizontal='center')
+    for ri, row in enumerate(rows, 2):
+        for ci, val in enumerate(row, 1):
+            ws2.cell(row=ri, column=ci, value=val)
+    ws2.column_dimensions['A'].width = 50
+    ws2.freeze_panes = 'A2'
+    wb2.save(xlsx_path)
+    print(f"\nExcel导出: {xlsx_path} ({len(rows)} 行)")
 
     conn.close()
     print(f"\n完成: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
