@@ -336,7 +336,7 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
             continue
 
         zip_size = os.path.getsize(task['zip_path']) / 1024
-        if zip_size < 100:
+        if zip_size <= 0:
             stats['skipped'] += 1
             continue
 
@@ -370,7 +370,7 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
             for f in files:
                 if f.endswith('.xlsx'):
                     fp = os.path.join(root, f)
-                    if os.path.getsize(fp) < 2000:  # XLSX最小约5KB, <2KB的不是有效文件
+                    if os.path.getsize(fp) <= 0:
                         continue
                     try:
                         wb = openpyxl.load_workbook(fp, data_only=True)
