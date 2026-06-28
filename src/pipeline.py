@@ -440,8 +440,8 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
                          material_name, material_desc, demand_quantity, unit,
                          project_org_name, delivery_place, remark,
                          material_code, extended_desc,
-                         source, source_file)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         demand_month, source, source_file)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     notice_id,
                     item.get('sub_bid_code'), item.get('sub_bid_name'),
@@ -450,6 +450,7 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
                     item.get('unit'), item.get('project_org_name'),
                     item.get('delivery_place'), item.get('remark'),
                     item.get('material_code'), item.get('extended_desc'),
+                    task['pub_time'].replace('-', '')[:6] if task.get('pub_time') else None,
                     'goods_list_xlsx', excel_name,
                 ))
                 inserted += cursor.rowcount
@@ -858,20 +859,10 @@ def _export_delivery():
     ws1.column_dimensions['F'].width = 38
     ws1.freeze_panes = 'A2'
 
-    # Sheet2: 招标物资明细表 (material_demand_item + source_file from bid_items)
+    # Sheet2: 招标物资明细表 (bid_items)
     ws2 = wb.create_sheet('招标物资明细表')
-    c.execute("""SELECT m.id, m.material_name, m.unit, m.demand_month, m.demand_quantity,
-                        b.source_file
-                 FROM material_demand_item m
-                 LEFT JOIN (
-                     SELECT CASE WHEN material_name LIKE '%,%'
-                              THEN substr(material_name, 1, instr(material_name, ',') - 1)
-                              ELSE material_name END as short_name,
-                         unit, MIN(source_file) as source_file
-                     FROM bid_items WHERE source_file IS NOT NULL
-                     GROUP BY 1, 2
-                 ) b ON b.short_name = m.material_name AND b.unit = m.unit
-                 ORDER BY m.demand_month, m.material_name""")
+    c.execute("""SELECT id, material_name, unit, demand_month, demand_quantity, source_file
+                 FROM bid_items ORDER BY demand_month, material_name""")
     rows2 = c.fetchall()
     for col, h in enumerate(['序号','物资名称','单位','月份','需求量','来源文件'], 1):
         c2 = ws2.cell(row=1, column=col, value=h)

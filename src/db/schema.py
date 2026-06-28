@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS bid_items (
     extended_desc   TEXT,
     project_org_id  INTEGER,
     project_org_name TEXT,
+    demand_month    TEXT,
     source          TEXT DEFAULT 'goods_list_xlsx',
     source_file     TEXT,
     created_at      TEXT DEFAULT (datetime('now'))
