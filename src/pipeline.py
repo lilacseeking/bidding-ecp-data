@@ -13,7 +13,7 @@ ECP2.0 国网冀北电力物资采购数据采集流水线
   python src/pipeline.py --full       # 全量模式 (采集全部)
   python src/pipeline.py --verify     # 仅复核检查
 """
-import sys, os, io, re, json, time, zipfile, hashlib, subprocess, shutil
+import sys, os, io, re, json, time, zipfile, hashlib, subprocess, shutil, sqlite3
 from datetime import datetime
 from collections import Counter
 from pathlib import Path
@@ -879,16 +879,121 @@ def main():
     result = phase5_verify(conn)
 
     print(f"\n{'='*60}")
-    print("流水线完成")
+    print("流水线完成, 更新所有产物...")
     print(f"{'='*60}")
     sd = result.get('status_dist', {})
     print(f"物资公告: {result['total_material']} | parsed={sd.get('parsed',0)} downloaded={sd.get('downloaded',0)} no_file={sd.get('no_file',0)} failed={sd.get('parse_failed',0)} pending={sd.get('pending',0)}")
     print(f"物资明细: {result['total_items']} | 单位: {result['org_count']}")
-    print(f"Excel目录: {EXCEL_DIR}")
-    print(f"数据库:   {DB_PATH}")
+
+    # --- 自动更新所有产物 ---
+    _update_all_outputs()
+    conn.close()
+
+
+def _update_all_outputs():
+    """每次流水线运行后自动更新所有产物"""
+    print()
+
+    # 1. 物资需求统计 + 图表 (独立进程, 避免stdout冲突)
+    try:
+        subprocess.run([sys.executable, os.path.join(PROJECT_ROOT, 'src', 'demand_stats.py')],
+                      timeout=120, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        print("  [OK] material_demand_stats + 图表")
+    except Exception as e:
+        print(f"  [SKIP] demand_stats: {e}")
+
+    # 2. 未处理公告Excel
+    try:
+        _export_unprocessed()
+        print("  [OK] unprocessed_notices.xlsx")
+    except Exception as e:
+        print(f"  [SKIP] unprocessed: {e}")
+
+    # 3. CSV导出
+    try:
+        import csv
+        out = os.path.join(PROJECT_ROOT, 'outputs', 'material_demand_stats.csv')
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        conn3 = sqlite3.connect(DB_PATH)
+        c3 = conn3.cursor()
+        c3.execute('SELECT material_name, unit, demand_month, demand_quantity, notice_count FROM material_demand_stats ORDER BY demand_month, material_name')
+        with open(out, 'w', encoding='utf-8-sig', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(['material_name','unit','demand_month','demand_quantity','notice_count'])
+            w.writerows(c3)
+        conn3.close()
+        print(f"  [OK] material_demand_stats.csv")
+    except Exception as e:
+        print(f"  [SKIP] CSV: {e}")
+
+    print(f"\n数据库: {DB_PATH}")
     print(f"完成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
+
+def _export_unprocessed():
+    """导出未处理公告到Excel"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''SELECT notice_id, title, code, notice_publish_time, doctype,
+                        excel_status, category
+                 FROM bid_notices WHERE excel_status != 'parsed'
+                 ORDER BY CASE excel_status WHEN 'no_file' THEN 1 WHEN 'parse_failed' THEN 2
+                 WHEN 'downloaded' THEN 3 ELSE 4 END, notice_publish_time DESC''')
+    rows = c.fetchall()
     conn.close()
+
+    if not rows:
+        return
+
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = '未处理公告'
+    headers = ['发布时间','公告类型','数据类别','标题','项目编号','文档类型','处理状态','状态码','未成功原因','页面链接']
+
+    hdr_fill = PatternFill(start_color='009688',end_color='009688',fill_type='solid')
+    hdr_font = Font(color='FFFFFF', bold=True)
+    for col, h in enumerate(headers, 1):
+        c2 = ws.cell(row=1, column=col, value=h)
+        c2.fill = hdr_fill; c2.font = hdr_font
+        c2.alignment = Alignment(horizontal='center',vertical='center',wrap_text=True)
+
+    fills = {'no_file':'FFF3CD','downloaded':'D4EDDA','parse_failed':'F8D7DA','pending':'E2E3E5'}
+
+    for ri, (nid,title,code,pt,dt,status,cat) in enumerate(rows, 2):
+        menu = '2018032900295987' if any(k in title for k in ['竞争性谈判','零星物资','询价','单一来源']) else '2018032700291334'
+        url = f'https://ecp.sgcc.com.cn/ecp2.0/portal/#/doc/{dt}/{nid}_{menu}'
+
+        reasons = []
+        if dt == 'doci-change': reasons.append('变更公告，无独立货物清单')
+        elif dt == 'doc-spec': reasons.append('特殊文档，无货物清单')
+        if cat in ('service','engineering'): reasons.append('服务/工程类，无物资数据')
+        if status == 'no_file': reasons.append('ZIP中无货物清单XLSX')
+        elif status == 'parse_failed': reasons.append('XLSX解析失败')
+        elif status == 'downloaded': reasons.append('XLSX存在但自动解析失败')
+        elif status == 'pending' and dt == 'doci-change': reasons.append('正刊已解析，无需重复')
+        elif status == 'pending': reasons.append('非物资采购公告')
+
+        vals = [pt, '采购公告' if menu=='2018032900295987' else '招标公告',
+                {'material':'物资','service':'服务','engineering':'工程','other':'其他'}.get(cat,cat),
+                title, code or '', dt,
+                {'pending':'未下载','downloaded':'下载成功未解析','no_file':'无货物清单','parse_failed':'解析失败'}.get(status,status),
+                status, '; '.join(reasons) if reasons else '待分析', url]
+
+        for ci, v in enumerate(vals, 1):
+            cell = ws.cell(row=ri, column=ci, value=v)
+            cell.alignment = Alignment(vertical='center', wrap_text=(ci in (4,9,10)))
+            if status in fills:
+                cell.fill = PatternFill(start_color=fills[status],end_color=fills[status],fill_type='solid')
+
+    for i,w in enumerate([12,10,8,65,25,12,18,10,55,80],1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    ws.freeze_panes = 'A2'
+
+    out = os.path.join(PROJECT_ROOT, 'data', 'unprocessed_notices.xlsx')
+    wb.save(out)
 
 
 if __name__ == "__main__":

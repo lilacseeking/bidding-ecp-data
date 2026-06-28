@@ -21,6 +21,10 @@ from datetime import datetime
 
 from db.schema import init_db
 
+# stdout encoding: 独立运行时需要, 被pipeline调用时pipeline已设置
+if 'pipeline' not in sys.modules:
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "ecp_data.db")
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "outputs", "figures")
 
@@ -166,7 +170,6 @@ def main():
     print("物资需求统计 + Top5 绘图")
     print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-    # 初始化 (确保新表存在)
     init_db(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
