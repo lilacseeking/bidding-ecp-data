@@ -1,34 +1,36 @@
 """
-物资需求统计 + Top5物资时间序列绘图
-
-1. 从 bid_items 聚合 → material_demand_item (物资名+单位+月份 → 需求量求和)
-2. 找月份分布最多的 Top5 物资
-3. 绘制 5 个子图上下排列的时间序列
+物资需求统计 + 多维度可视化仪表盘
 
 执行: python src/demand_stats.py
+生成图表:
+  1. 年度招标物资金额/数量趋势
+  2. 物资大类分布饼图
+  3. 物资大类年度堆叠柱状图
+  4. 月度公告数量趋势
+  5. TOP15 物资需求量排名
+  6. 月度需求热力图 (物资大类 × 月份)
 """
 import sys, os, io
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 import sqlite3
-from collections import Counter
+from collections import Counter, defaultdict
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+import numpy as np
 from datetime import datetime
 
 from db.schema import init_db
 
-# stdout encoding: 独立运行时需要, 被pipeline调用时pipeline已设置
 if 'pipeline' not in sys.modules:
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "ecp_data.db")
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "..", "outputs", "figures")
 
-# 中文字体 - 使用font_manager显式加载避免权限错误
 import matplotlib.font_manager as fm
 for fname in ['Microsoft YaHei', 'SimHei', 'KaiTi']:
     try:
@@ -39,190 +41,456 @@ for fname in ['Microsoft YaHei', 'SimHei', 'KaiTi']:
     except Exception:
         continue
 plt.rcParams['axes.unicode_minus'] = False
-# 清除字体缓存避免PermissionError
 fm._load_fontmanager(try_read_cache=False)
 
+# 物资大类映射
+CATEGORY_MAP = {
+    '变压器': ['变压器', '变压器台成套', '调压器'],
+    '开关柜/环网柜': ['开关柜', '环网柜', '环网箱', '箱式变电站', '低压屏柜', '配电箱', '端子箱', '空屏柜', '电能表屏'],
+    '电缆/导线': ['电缆', '导线', '光缆', '布电线', '钢芯', '扩径导线', '软铜绞线',
+                 '预制光缆', '通信电缆', '控制电缆', '导地线'],
+    '避雷器/绝缘子': ['避雷器', '绝缘子', '穿墙套管', '交流支柱绝缘子', '拉紧绝缘子'],
+    '断路器/组合电器': ['断路器', '组合电器', 'GIS', '隔离开关', '负荷开关', '熔断器', '高压熔断器'],
+    '保护/监控/自动化': ['保护', '故障录波', '监控系统', '在线监测', '自动化', '时间同步',
+                     '测控', '生产管理', '运维管理', '调度', '智能变电站', '压板', '数字化'],
+    '通信设备': ['通信', '光端机', '交换机', '集线器', '综合接入', '电话及电视会议',
+                '通信单元', '网络设备'],
+    '电源/蓄电池': ['电源', '蓄电池', 'UPS', '充电', '直流', '逆变'],
+    '杆塔/金具/铁附件': ['水泥杆', '锥形水泥杆', '钢管杆', '铁塔', '金具', '铁构件',
+                       '铁附件', '地脚螺栓', '防鸟设备', '接地模块', '航空障碍灯'],
+    '消防/安防': ['消防', '火灾报警', '防火', '灭火', '图像监视', '视频监视', '视频在线', '防山火'],
+    '仪器仪表': ['电能表', '监测', '传感器', '检漏', '定位', '气象', '检测'],
+    '其他': [],
+}
 
-def short_name(raw: str) -> str:
-    """提取物资简称: 逗号前的部分"""
-    return raw.split(',')[0].split('(')[0].strip()
+
+def classify_material(name: str) -> str:
+    for cat, keywords in CATEGORY_MAP.items():
+        if cat == '其他':
+            continue
+        for kw in keywords:
+            if kw in name:
+                return cat
+    return '其他'
 
 
 def build_demand_stats(conn):
-    """从 bid_items 聚合生成 material_demand_item"""
     c = conn.cursor()
-
-    # 清理旧数据
     c.execute("DELETE FROM material_demand_item")
-
-    # 聚合: 物资简称 + 单位 + 月份(YYYYMM) → SUM(需求量)
-    c.execute("""
-        INSERT OR REPLACE INTO material_demand_item
-            (material_name, unit, demand_month, demand_quantity, notice_count)
-        SELECT
-            CASE WHEN i.material_name LIKE '%,%'
+    c.execute("""INSERT OR REPLACE INTO material_demand_item
+        (material_name, unit, demand_month, demand_quantity, notice_count)
+        SELECT CASE WHEN i.material_name LIKE '%,%'
                  THEN substr(i.material_name, 1, instr(i.material_name, ',') - 1)
                  ELSE i.material_name END,
-            i.unit,
-            substr(n.notice_publish_time, 1, 4) || substr(n.notice_publish_time, 6, 2),
-            SUM(i.demand_quantity),
-            COUNT(DISTINCT i.notice_id)
+            i.unit, i.demand_month, SUM(i.demand_quantity), COUNT(DISTINCT i.notice_id)
         FROM bid_items i
-        JOIN bid_notices n ON i.notice_id = n.notice_id
-        WHERE i.demand_quantity IS NOT NULL
-          AND i.unit IS NOT NULL
-          AND i.material_name IS NOT NULL
-        GROUP BY 1, 2, 3
-    """)
+        WHERE i.demand_quantity IS NOT NULL AND i.unit IS NOT NULL AND i.material_name IS NOT NULL
+        GROUP BY 1, 2, 3""")
     conn.commit()
-
-    # 聚合生成 material_demand_total (跨单位求和)
     c.execute("DELETE FROM material_demand_total")
-    c.execute("""
-        INSERT OR REPLACE INTO material_demand_total
-            (material_name, demand_month, demand_quantity, notice_count)
-        SELECT material_name, demand_month, SUM(demand_quantity) as total_qty,
-               MAX(notice_count)
-        FROM material_demand_item
-        GROUP BY material_name, demand_month
-    """)
+    c.execute("""INSERT OR REPLACE INTO material_demand_total
+        (material_name, demand_month, demand_quantity, notice_count)
+        SELECT material_name, demand_month, SUM(demand_quantity), MAX(notice_count)
+        FROM material_demand_item GROUP BY material_name, demand_month""")
     conn.commit()
-
     c.execute("SELECT COUNT(*) FROM material_demand_item")
-    print(f"material_demand_item: {c.fetchone()[0]} 条记录")
+    print(f"material_demand_item: {c.fetchone()[0]} 条")
 
 
-def get_top5_materials(conn) -> list[tuple]:
-    """找出月份数最多的 Top5 物资"""
+# ============================================================
+# 图表1: 年度招标物资总量趋势 (按大类分色堆叠柱状图)
+# ============================================================
+def plot_yearly_category_stacked(conn):
     c = conn.cursor()
-    c.execute("""
-        SELECT material_name, unit, COUNT(DISTINCT demand_month) as month_cnt,
-               SUM(demand_quantity) as total_qty
-        FROM material_demand_item
-        GROUP BY material_name, unit
-        ORDER BY month_cnt DESC
-        LIMIT 5
-    """)
-    return [(r[0], r[1], r[2], r[3]) for r in c]
+    c.execute("""SELECT demand_month, material_name, SUM(demand_quantity)
+        FROM material_demand_total GROUP BY 1, 2 ORDER BY 1""")
+    rows = c.fetchall()
+    if not rows:
+        return
+
+    yearly_cat = defaultdict(lambda: defaultdict(float))
+    for month, mat, qty in rows:
+        year = month[:4]
+        cat = classify_material(mat)
+        yearly_cat[year][cat] += qty
+
+    years = sorted(yearly_cat.keys())
+    categories = ['电缆/导线', '杆塔/金具/铁附件', '开关柜/环网柜', '避雷器/绝缘子',
+                  '保护/监控/自动化', '断路器/组合电器', '通信设备', '变压器',
+                  '电源/蓄电池', '消防/安防', '仪器仪表', '其他']
+    colors = ['#E53935', '#1E88E5', '#43A047', '#FB8C00', '#8E24AA',
+              '#00ACC1', '#FDD835', '#6D4C41', '#546E7A', '#D81B60', '#3949AB', '#BDBDBD']
+
+    data = []
+    labels = []
+    for cat in categories:
+        row = [yearly_cat[y].get(cat, 0) for y in years]
+        if any(v > 0 for v in row):
+            data.append(row)
+            labels.append(cat)
+
+    if not data:
+        return
+
+    fig, ax = plt.subplots(figsize=(16, 7))
+    x = range(len(years))
+    bottom = np.zeros(len(years))
+    for i, (cat_data, cat_label) in enumerate(zip(data, labels)):
+        bars = ax.bar(x, cat_data, bottom=bottom, label=cat_label,
+                     color=colors[i % len(colors)], width=0.6, edgecolor='white', linewidth=0.5)
+        bottom += np.array(cat_data)
+        for bar, val in zip(bars, cat_data):
+            if val > max(cat_data) * 0.1:
+                ax.text(bar.get_x() + bar.get_width()/2, bar.get_y() + bar.get_height()/2,
+                       f'{val/10000:.0f}万' if val >= 10000 else f'{val:.0f}',
+                       ha='center', va='center', fontsize=7, fontweight='bold')
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(years, fontsize=12)
+    ax.set_title('国网冀北电力 — 年度招标物资总量趋势 (按大类堆叠)', fontsize=16, fontweight='bold', pad=15)
+    ax.set_ylabel('需求数量 (台/套/千米等)', fontsize=12)
+    ax.legend(loc='upper left', fontsize=9, ncol=3, framealpha=0.9)
+    ax.grid(axis='y', alpha=0.3, linestyle='--')
+    ax.set_ylim(0, bottom.max() * 1.15)
+
+    path = os.path.join(OUTPUT_DIR, '年度招标物资总量趋势.png')
+    fig.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f'  [OK] {os.path.basename(path)}')
 
 
-def plot_top5(conn, top5: list[tuple]):
-    """绘制Top5物资需求量时间序列，5个子图上下排列"""
+# ============================================================
+# 图表2: 物资大类分布饼图
+# ============================================================
+def plot_category_pie(conn):
     c = conn.cursor()
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    c.execute("SELECT material_name, SUM(demand_quantity) FROM material_demand_total GROUP BY 1")
+    rows = c.fetchall()
+    if not rows:
+        return
 
-    fig, axes = plt.subplots(5, 1, figsize=(18, 22), sharex=False)
-    fig.suptitle('国网冀北电力 — 物资需求数量月度变化 (Top5 月份覆盖最多)',
-                 fontsize=16, fontweight='bold', y=0.99)
+    cat_totals = defaultdict(float)
+    for mat, qty in rows:
+        cat_totals[classify_material(mat)] += qty
 
-    colors = ['#2196F3', '#FF5722', '#4CAF50', '#FF9800', '#9C27B0']
+    sorted_cats = sorted(cat_totals.items(), key=lambda x: x[1], reverse=True)
+    labels = [c for c, _ in sorted_cats]
+    values = [v for _, v in sorted_cats]
+    colors = ['#E53935', '#1E88E5', '#43A047', '#FB8C00', '#8E24AA',
+              '#00ACC1', '#FDD835', '#6D4C41', '#546E7A', '#D81B60', '#3949AB', '#BDBDBD']
 
-    for idx, (mat_name, unit, month_cnt, total_qty) in enumerate(top5):
-        ax = axes[idx]
+    fig, ax = plt.subplots(figsize=(10, 10))
+    wedges, texts, autotexts = ax.pie(values, labels=labels, autopct='%1.1f%%',
+        colors=colors[:len(labels)], startangle=90, pctdistance=0.85,
+        wedgeprops=dict(width=0.4, edgecolor='white'))
+    for t in autotexts:
+        t.set_fontsize(9)
+        t.set_fontweight('bold')
+    for t in texts:
+        t.set_fontsize(11)
+    ax.set_title('国网冀北电力 — 物资大类需求分布 (2020-2026累计)', fontsize=16, fontweight='bold', pad=20)
 
-        # 查询该物资的月度数据
-        c.execute("""
-            SELECT demand_month, demand_quantity
-            FROM material_demand_item
-            WHERE material_name = ? AND unit = ?
-            ORDER BY demand_month
-        """, (mat_name, unit))
+    path = os.path.join(OUTPUT_DIR, '物资大类分布饼图.png')
+    fig.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f'  [OK] {os.path.basename(path)}')
+
+
+# ============================================================
+# 图表3: 月度公告数量趋势
+# ============================================================
+def plot_monthly_notice_count(conn):
+    c = conn.cursor()
+    c.execute("""SELECT demand_month, COUNT(DISTINCT notice_id) as cnt
+        FROM bid_items GROUP BY demand_month ORDER BY demand_month""")
+    rows = c.fetchall()
+    if not rows:
+        return
+
+    months = [r[0] for r in rows]
+    counts = [r[1] for r in rows]
+    years = sorted(set(m[:4] for m in months))
+    colors = plt.cm.tab20(np.linspace(0, 1, len(years)))
+
+    fig, ax = plt.subplots(figsize=(18, 6))
+    bars = ax.bar(range(len(months)), counts, width=0.8,
+                  color=[colors[years.index(m[:4])] for m in months],
+                  edgecolor='white', linewidth=0.3)
+
+    # 年度分割线
+    prev_year = months[0][:4]
+    for i, m in enumerate(months):
+        if m[:4] != prev_year:
+            ax.axvline(i - 0.5, color='#999', linestyle='--', linewidth=0.8, alpha=0.7)
+            prev_year = m[:4]
+
+    tick_pos = list(range(0, len(months), max(1, len(months)//12)))
+    tick_lbl = [f"{months[i][:4]}-{months[i][4:]}" for i in tick_pos]
+    ax.set_xticks(tick_pos)
+    ax.set_xticklabels(tick_lbl, fontsize=8, rotation=45, ha='right')
+    ax.set_title('国网冀北电力 — 月度招标物资公告数量趋势', fontsize=16, fontweight='bold')
+    ax.set_ylabel('涉及公告数', fontsize=12)
+    ax.grid(axis='y', alpha=0.3, linestyle='--')
+
+    # 图例
+    from matplotlib.patches import Patch
+    legend_elements = [Patch(facecolor=colors[i], label=y) for i, y in enumerate(years)]
+    ax.legend(handles=legend_elements, fontsize=9, loc='upper left', ncol=len(years))
+
+    path = os.path.join(OUTPUT_DIR, '月度公告数量趋势.png')
+    fig.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f'  [OK] {os.path.basename(path)}')
+
+
+# ============================================================
+# 图表4: TOP15 物资需求量排名
+# ============================================================
+def plot_top15_materials(conn):
+    c = conn.cursor()
+    c.execute("""SELECT material_name, SUM(demand_quantity) as total
+        FROM material_demand_total GROUP BY material_name
+        ORDER BY total DESC LIMIT 15""")
+    rows = c.fetchall()
+    if not rows:
+        return
+
+    names = [r[0][:30] for r in reversed(rows)]
+    values = [r[1] for r in reversed(rows)]
+    cat_colors = []
+    for r in reversed(rows):
+        cat = classify_material(r[0])
+        cat_colors.append({'电缆/导线': '#E53935', '杆塔/金具/铁附件': '#1E88E5',
+                          '开关柜/环网柜': '#43A047', '避雷器/绝缘子': '#FB8C00',
+                          '保护/监控/自动化': '#8E24AA', '断路器/组合电器': '#00ACC1',
+                          '通信设备': '#FDD835', '变压器': '#6D4C41',
+                          '电源/蓄电池': '#546E7A', '消防/安防': '#D81B60',
+                          '仪器仪表': '#3949AB', '其他': '#BDBDBD'}.get(cat, '#999'))
+
+    fig, ax = plt.subplots(figsize=(14, 8))
+    bars = ax.barh(range(len(names)), values, color=cat_colors, edgecolor='white', height=0.7)
+    ax.set_yticks(range(len(names)))
+    ax.set_yticklabels(names, fontsize=10)
+    ax.set_xlabel('需求数量', fontsize=12)
+    ax.set_title('国网冀北电力 — TOP15 物资需求排名', fontsize=16, fontweight='bold')
+    ax.grid(axis='x', alpha=0.3, linestyle='--')
+
+    for bar, val in zip(bars, values):
+        label = f'{val/10000:.1f}万' if val >= 10000 else f'{val:,.0f}'
+        ax.text(bar.get_width() + max(values)*0.01, bar.get_y() + bar.get_height()/2,
+               label, va='center', fontsize=9, fontweight='bold')
+
+    # 图例
+    from matplotlib.patches import Patch
+    color_dict = {'电缆/导线': '#E53935', '杆塔/金具/铁附件': '#1E88E5',
+                  '开关柜/环网柜': '#43A047', '避雷器/绝缘子': '#FB8C00',
+                  '保护/监控/自动化': '#8E24AA', '断路器/组合电器': '#00ACC1',
+                  '通信设备': '#FDD835', '变压器': '#6D4C41',
+                  '电源/蓄电池': '#546E7A', '消防/安防': '#D81B60',
+                  '仪器仪表': '#3949AB', '其他': '#BDBDBD'}
+    unique_cats = list(set((classify_material(r[0]) for r in rows)))
+    legend_elements = [Patch(facecolor=color_dict[cat], label=cat) for cat in unique_cats]
+    ax.legend(handles=legend_elements, fontsize=9, loc='lower right')
+
+    path = os.path.join(OUTPUT_DIR, 'TOP15物资需求量排名.png')
+    fig.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f'  [OK] {os.path.basename(path)}')
+
+
+# ============================================================
+# 图表5: 热度图 — 物资大类 × 年份需求热力
+# ============================================================
+def plot_category_heatmap(conn):
+    c = conn.cursor()
+    c.execute("SELECT demand_month, material_name, SUM(demand_quantity) FROM material_demand_total GROUP BY 1,2")
+    rows = c.fetchall()
+    if not rows:
+        return
+
+    yearly_cat = defaultdict(lambda: defaultdict(float))
+    for month, mat, qty in rows:
+        cat = classify_material(mat)
+        yearly_cat[cat][month[:4]] += qty
+
+    categories = [c for c in CATEGORY_MAP.keys() if c in yearly_cat]
+    years = sorted(set(y for cat_data in yearly_cat.values() for y in cat_data))
+
+    if not years or not categories:
+        return
+
+    data = np.zeros((len(categories), len(years)))
+    for i, cat in enumerate(categories):
+        for j, year in enumerate(years):
+            data[i, j] = yearly_cat[cat].get(year, 0)
+
+    # Normalize per row for better visualization
+    data_log = np.log1p(data)
+
+    fig, ax = plt.subplots(figsize=(12, 8))
+    im = ax.imshow(data_log, cmap='YlOrRd', aspect='auto')
+
+    ax.set_xticks(range(len(years)))
+    ax.set_xticklabels(years, fontsize=11)
+    ax.set_yticks(range(len(categories)))
+    ax.set_yticklabels(categories, fontsize=11)
+
+    # Annotate with actual values
+    for i in range(len(categories)):
+        for j in range(len(years)):
+            val = data[i, j]
+            if val > 0:
+                label = f'{val/10000:.0f}万' if val >= 10000 else f'{val:.0f}'
+                ax.text(j, i, label, ha='center', va='center', fontsize=8,
+                       fontweight='bold', color='white' if data_log[i,j] > data_log.max()*0.6 else 'black')
+
+    ax.set_title('国网冀北电力 — 物资大类 × 年度需求热力图', fontsize=16, fontweight='bold', pad=15)
+    cbar = plt.colorbar(im, ax=ax, shrink=0.8)
+    cbar.set_label('log(1+需求量)', fontsize=10)
+
+    path = os.path.join(OUTPUT_DIR, '物资需求年度热力图.png')
+    fig.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f'  [OK] {os.path.basename(path)}')
+
+
+# ============================================================
+# 图表6: 6种核心物资月度趋势 (每页2行×3列)
+# ============================================================
+def plot_core_materials_trend(conn):
+    c = conn.cursor()
+    c.execute("""SELECT material_name, SUM(demand_quantity) as total
+        FROM material_demand_total GROUP BY material_name
+        ORDER BY total DESC LIMIT 6""")
+    top6 = c.fetchall()
+    if not top6:
+        return
+
+    fig, axes = plt.subplots(3, 2, figsize=(20, 18))
+    fig.suptitle('国网冀北电力 — 核心物资月度需求趋势', fontsize=16, fontweight='bold', y=0.99)
+
+    colors = ['#E53935', '#1E88E5', '#43A047', '#FB8C00', '#8E24AA', '#00ACC1']
+
+    for idx, ax in enumerate(axes.flat):
+        mat_name = top6[idx][0]
+        c.execute("""SELECT demand_month, demand_quantity FROM material_demand_total
+            WHERE material_name=? ORDER BY demand_month""", (mat_name,))
         rows = c.fetchall()
+        if not rows:
+            continue
 
         months = [r[0] for r in rows]
         quantities = [r[1] for r in rows]
 
-        # 格式化为可读标签 (每隔4个标注)
-        month_labels = []
-        for i, m in enumerate(months):
-            if i % max(1, len(months) // 10) == 0:
-                month_labels.append(f"{m[:4]}-{m[4:]}")
-            else:
-                month_labels.append('')
-
-        ax.fill_between(range(len(months)), quantities, alpha=0.3, color=colors[idx])
+        ax.fill_between(range(len(months)), quantities, alpha=0.25, color=colors[idx])
         ax.plot(range(len(months)), quantities, 'o-', color=colors[idx],
-                linewidth=2, markersize=4, markerfacecolor='white')
+                linewidth=2, markersize=3, markerfacecolor='white')
 
-        # 标注峰值
         if quantities:
-            max_idx = quantities.index(max(quantities))
-            ax.annotate(f'{quantities[max_idx]:,.0f}',
-                       xy=(max_idx, quantities[max_idx]),
-                       xytext=(0, 10), textcoords='offset points',
-                       fontsize=9, ha='center', color=colors[idx],
-                       fontweight='bold')
+            mx_idx = quantities.index(max(quantities))
+            ax.annotate(f'{quantities[mx_idx]:,.0f}', xy=(mx_idx, quantities[mx_idx]),
+                       xytext=(0, 10), textcoords='offset points', fontsize=10,
+                       ha='center', color=colors[idx], fontweight='bold')
 
-        ax.set_title(f'{mat_name} ({unit})  |  覆盖 {month_cnt} 个月, 累计 {total_qty:,.0f} {unit}',
-                    fontsize=13, loc='left')
-        ax.set_ylabel(f'需求量 ({unit})', fontsize=11)
-        ax.grid(axis='y', alpha=0.4, linestyle='--')
+        tick_pos = list(range(0, len(months), max(1, len(months)//8)))
+        tick_lbl = [f"{months[i][:4]}-{months[i][4:]}" for i in tick_pos]
+        ax.set_xticks(tick_pos)
+        ax.set_xticklabels(tick_lbl, fontsize=7, rotation=30, ha='right')
+        ax.set_title(f'{mat_name[:40]}', fontsize=13, loc='left')
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
         ax.set_xlim(-0.5, len(months) - 0.5)
 
-        # X轴标签
-        tick_positions = list(range(len(months)))
-        tick_labels = [f"{m[:4]}-{m[4:]}" if i % max(1, len(months)//8) == 0 else ''
-                       for i, m in enumerate(months)]
-        ax.set_xticks(tick_positions)
-        ax.set_xticklabels(tick_labels, fontsize=8, rotation=30, ha='right')
-
-    # X轴标签
-    axes[-1].set_xlabel('时间 (月)', fontsize=12)
-
-    plt.tight_layout(rect=[0, 0, 1, 0.98])
-    output_path = os.path.join(OUTPUT_DIR, '物资需求Top5月度趋势.png')
-    fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor='white')
+    path = os.path.join(OUTPUT_DIR, '核心物资月度趋势.png')
+    fig.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
-    print(f'\n图表已保存: {output_path}')
-
-    return output_path
+    print(f'  [OK] {os.path.basename(path)}')
 
 
+# ============================================================
+# 图表7: 招标公告 vs 采购公告年度对比
+# ============================================================
+def plot_notice_type_comparison(conn):
+    c = conn.cursor()
+    c.execute("""SELECT notice_publish_time, title FROM bid_notices
+        WHERE category='material' AND doctype='doci-bid'
+        AND title NOT LIKE '%变更%' AND source_file IS NOT NULL""")
+    rows = c.fetchall()
+
+    monthly = defaultdict(lambda: {'招标公告': 0, '采购公告': 0})
+    for pt, title in rows:
+        month = pt[:4] + pt[5:7]
+        tp = '采购公告' if any(k in (title or '') for k in ['竞争性谈判','零星物资','询价']) else '招标公告'
+        monthly[month][tp] += 1
+
+    months_sorted = sorted(monthly.keys())
+    zb = [monthly[m]['招标公告'] for m in months_sorted]
+    cg = [monthly[m]['采购公告'] for m in months_sorted]
+
+    fig, ax = plt.subplots(figsize=(18, 6))
+    x = range(len(months_sorted))
+    ax.bar(x, zb, width=0.6, label='招标公告', color='#1E88E5', edgecolor='white')
+    ax.bar(x, cg, width=0.6, bottom=zb, label='采购公告(竞争性谈判/零星物资)',
+           color='#FF9800', edgecolor='white')
+
+    tick_pos = list(range(0, len(months_sorted), max(1, len(months_sorted)//12)))
+    tick_lbl = [f"{months_sorted[i][:4]}-{months_sorted[i][4:]}" for i in tick_pos]
+    ax.set_xticks(tick_pos)
+    ax.set_xticklabels(tick_lbl, fontsize=8, rotation=45, ha='right')
+    ax.set_title('国网冀北电力 — 招标公告 vs 采购公告月度分布', fontsize=16, fontweight='bold')
+    ax.set_ylabel('公告数量', fontsize=12)
+    ax.legend(fontsize=10)
+    ax.grid(axis='y', alpha=0.3, linestyle='--')
+
+    path = os.path.join(OUTPUT_DIR, '公告类型月度对比.png')
+    fig.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f'  [OK] {os.path.basename(path)}')
+
+
+# ============================================================
+# 主入口
+# ============================================================
 def main():
-    print("物资需求统计 + Top5 绘图")
+    print("物资需求统计 + 多维度可视化")
     print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     init_db(DB_PATH)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
 
-    # Step 1: 聚合
     build_demand_stats(conn)
 
-    # Step 2: Top5
-    top5 = get_top5_materials(conn)
-    print(f"\n月份覆盖最多的 Top5 物资:")
-    for mat, unit, mc, total in top5:
-        print(f"  {mat[:50]}: {mc} 个月, {total:,.0f} {unit}")
+    # 生成所有图表
+    print("\n生成图表:")
+    plot_yearly_category_stacked(conn)
+    plot_category_pie(conn)
+    plot_monthly_notice_count(conn)
+    plot_top15_materials(conn)
+    plot_category_heatmap(conn)
+    plot_core_materials_trend(conn)
+    plot_notice_type_comparison(conn)
 
-    # Step 3: 绘图
-    if top5:
-        plot_top5(conn, top5)
-
-    # Step 4: 导出统计Excel
+    # 导出Excel
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
     xlsx_path = os.path.join(os.path.dirname(__file__), "..", "outputs", "物资需求统计.xlsx")
     os.makedirs(os.path.dirname(xlsx_path), exist_ok=True)
     c = conn.cursor()
     c.execute("""SELECT material_name, unit, demand_month, demand_quantity, notice_count
         FROM material_demand_item ORDER BY demand_month, material_name""")
     rows = c.fetchall()
-    import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment
-    wb2 = openpyxl.Workbook()
-    ws2 = wb2.active
-    ws2.title = '物资需求统计'
+    wb = openpyxl.Workbook()
+    ws = wb.active; ws.title = '物资需求统计'
     hdr_f = PatternFill(start_color='009688', end_color='009688', fill_type='solid')
     for col, h in enumerate(['物资名称','单位','月份','需求量','公告数'], 1):
-        c2 = ws2.cell(row=1, column=col, value=h)
+        c2 = ws.cell(row=1, column=col, value=h)
         c2.fill = hdr_f; c2.font = Font(color='FFFFFF', bold=True)
-        c2.alignment = Alignment(horizontal='center')
     for ri, row in enumerate(rows, 2):
-        for ci, val in enumerate(row, 1):
-            ws2.cell(row=ri, column=ci, value=val)
-    ws2.column_dimensions['A'].width = 50
-    ws2.freeze_panes = 'A2'
-    wb2.save(xlsx_path)
-    print(f"\nExcel导出: {xlsx_path} ({len(rows)} 行)")
+        for ci, val in enumerate(row, 1): ws.cell(row=ri, column=ci, value=val)
+    ws.column_dimensions['A'].width = 50
+    ws.freeze_panes = 'A2'
+    wb.save(xlsx_path)
+    print(f"\nExcel: {xlsx_path} ({len(rows)} 行)")
 
     conn.close()
     print(f"\n完成: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
