@@ -107,73 +107,46 @@ python src/demand_stats.py
 ### 主流水线 (5阶段)
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#1565C0', 'primaryTextColor': '#fff', 'lineColor': '#42A5F5', 'fontSize': '14px'}}}%%
 graph TB
     START([开始]) --> P1
 
-    subgraph "Phase 1: 列表采集"
-        P1[noteList API<br/>POST 请求] --> P1A[orgId=2019061900137008<br/>冀北电力]
-        P1A --> P1B[分页获取全部401条]
-        P1B --> P1C[INSERT OR IGNORE<br/>bid_notices 表]
-    end
+    P1["<b>Phase 1 列表采集</b><br/>POST noteList API<br/>分页获取 401 条公告"] --> P2
+    P2["<b>Phase 2 分类</b><br/>关键词匹配标题<br/>物资 108 条 | 服务 288 条"] --> P3
+    P3["<b>Phase 3 下载</b><br/>GET downLoadBid?noticeId=N<br/>ZIP 保存到 data/excels"] --> P3X{ZIP 有效?}
+    P3X -->|是| P4
+    P3X -->|否| P5
 
-    subgraph "Phase 2: 分类"
-        P2[关键词匹配] --> P2A{标题含物资关键词?}
-        P2A -->|是| P2B[category=material<br/>108条]
-        P2A -->|否| P2C[category=service<br/>跳过]
-        P2B --> P2D[提取批次+年份<br/>bid_batch / bid_year]
-    end
+    P4["<b>Phase 4 解析</b><br/>纯内存解压 ZIP<br/>struct 绕过文件名乱码"] --> P4A{嵌套 ZIP?}
+    P4A -->|是| P4B[递归解压最多 3 层]
+    P4A -->|否| P4C[openpyxl 读取 XLSX]
+    P4B --> P4C
+    P4C --> P4D{表头签名匹配?}
+    P4D -->|是| P4E[detect_column_map<br/>自动检测列映射]
+    P4D -->|否| P4F[跳过该 Sheet]
+    P4E --> P4G["逐行解析<br/>→ bid_items<br/>→ org_units"]
+    P4G --> P5
 
-    subgraph "Phase 3: 下载"
-        P3[筛选正刊公告<br/>doctype=doci-bid] --> P3A[GET downLoadBid<br/>?noticeId=N]
-        P3A --> P3B{ZIP > 1KB?}
-        P3B -->|是| P3C[保存到 data/excels/<br/>{code}.zip]
-        P3B -->|否| P3D[excel_status=no_file]
-    end
+    P5["<b>Phase 5 复核</b><br/>状态分布 | 遗漏检查 | 去重验证"] --> O1
 
-    subgraph "Phase 4: 解析"
-        P4[纯内存解压ZIP<br/>struct读取header偏移] --> P4A{发现嵌套ZIP?}
-        P4A -->|是| P4B[递归解压<br/>最多3层]
-        P4A -->|否| P4C[遍历XLSX]
-        P4B --> P4C
-        P4C --> P4D{表头含<br/>物资名称/物料描述?}
-        P4D -->|是| P4E[detect_column_map<br/>自动检测列映射]
-        P4D -->|否| P4F[跳过该Sheet]
-        P4E --> P4G[逐行解析→bid_items]
-        P4G --> P4H[提取项目单位<br/>→org_units]
-        P4H --> P4I[excel_status=parsed]
-    end
-
-    subgraph "Phase 5: 复核"
-        P5[检查一致性] --> P5A[状态分布统计]
-        P5A --> P5B[遗漏公告清单]
-        P5B --> P5C[重复记录检查<br/>UNIQUE INDEX]
-    end
-
-    subgraph "产物更新"
-        O1[demand_stats.py<br/>物资需求按月汇总]
-        O2[unprocessed_notices.xlsx<br/>未处理公告Excel]
-        O3[Top5时间序列图表<br/>5子图上下排列]
-        O4[material_demand_stats.csv]
-    end
-
-    P1C --> P2
-    P2D --> P3
-    P3C --> P4
-    P3D --> P5
-    P4I --> P5
-    P5C --> O1
-    O1 --> O2
-    O2 --> O3
-    O3 --> O4
-    O4 --> END([完成])
+    O1["<b>产物更新</b><br/>demand_stats 汇总表"] --> O2
+    O2["unprocessed_notices.xlsx<br/>未处理公告清单"] --> O3
+    O3["Top5 物资时间序列图<br/>5 子图上下排列"] --> O4
+    O4["material_demand_stats.csv<br/>完整统计导出"] --> END([完成])
 
     style START fill:#009688,color:#fff
-    style END fill:#009688,color:#fff
+    style P1 fill:#1565C0,color:#fff
+    style P2 fill:#1565C0,color:#fff
+    style P3 fill:#1565C0,color:#fff
+    style P4 fill:#E65100,color:#fff
     style P4B fill:#FF9800,color:#fff
     style P4E fill:#FF9800,color:#fff
-    style P4H fill:#9C27B0,color:#fff
-    style O3 fill:#E91E63,color:#fff
+    style P4G fill:#9C27B0,color:#fff
+    style P5 fill:#2E7D32,color:#fff
+    style O1 fill:#00695C,color:#fff
+    style O2 fill:#00695C,color:#fff
+    style O3 fill:#C62828,color:#fff
+    style O4 fill:#00695C,color:#fff
+    style END fill:#009688,color:#fff
 ```
 
 ### Excel 列映射自动检测
