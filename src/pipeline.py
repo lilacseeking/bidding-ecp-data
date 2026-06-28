@@ -54,16 +54,19 @@ MATERIAL_KW = [
 # ============================================================
 # Excel 列映射 — 基于表头自动检测, 而非硬编码列号
 # ============================================================
-GOODS_LIST_SIGNATURE = "物资名称"  # 表头必须包含此列才是货物清单
+# 货物清单表头签名 (两种格式)
+GOODS_LIST_SIGNATURES = ["物资名称", "物料描述"]
 
 
 def detect_column_map(headers: list[str]) -> dict[str, int] | None:
     """
     根据表头名称自动检测列索引。
-    支持23列和27列等不同版本的Excel。
+    支持格式1: 23/27列招标公告货物清单 (物资名称)
+    支持格式2: 零星物资/竞争性谈判货物清单 (物料描述/分标名称)
     返回 {字段名: 列索引}, 不是货物清单则返回 None。
     """
-    if GOODS_LIST_SIGNATURE not in headers:
+    has_signature = any(sig in headers for sig in GOODS_LIST_SIGNATURES)
+    if not has_signature:
         return None
 
     col_map = {}
@@ -71,7 +74,7 @@ def detect_column_map(headers: list[str]) -> dict[str, int] | None:
         h = h.strip().replace(' ', '').replace('\n', '')
         if '分标编号' in h:
             col_map['sub_bid_code'] = i
-        elif h == '包名称':
+        elif h == '包名称' or '分包名称' in h:
             col_map['package_name'] = i
         elif '分包编号' in h:
             col_map['package_no'] = i
@@ -85,9 +88,12 @@ def detect_column_map(headers: list[str]) -> dict[str, int] | None:
             col_map['voltage_level'] = i
         elif h == '物资名称':
             col_map['material_name'] = i
+        elif '物料描述' in h and col_map.get('material_name') is None:
+            # 零星物资格式用"物料描述"代替"物资名称"
+            col_map['material_name'] = i
         elif '物资描述' in h:
             col_map['material_desc'] = i
-        elif h == '单位':
+        elif h == '单位' or h == '计量单位':
             col_map['unit'] = i
         elif h == '数量':
             col_map['quantity'] = i
@@ -101,17 +107,19 @@ def detect_column_map(headers: list[str]) -> dict[str, int] | None:
             col_map['delivery_method'] = i
         elif h == '备注':
             col_map['remark'] = i
-        elif '物料编码' in h:
+        elif '物料编码' in h or '细分物料编码' in h:
             col_map['material_code'] = i
         elif '扩展描述' in h:
             col_map['extended_desc'] = i
         elif '技术规范' in h:
             col_map['tech_spec_code'] = i
+        elif '分标名称' in h and '分标编号' not in h:
+            col_map['sub_bid_name_col'] = i  # Sheet名之外的分标名列
 
-    # 核心三列必须存在
-    if all(k in col_map for k in ['material_name', 'unit', 'quantity']):
-        return col_map
-    return None
+    # 至少需要物名称
+    if 'material_name' not in col_map:
+        return None
+    return col_map
 
 
 # 已知的硬编码修正 (notice_id → {sheet_name → {col_name → col_index}})
@@ -352,41 +360,54 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
 
         print(f"[{i+1}/{len(tasks)}] {task['pub_time']} {title[:55]}...")
 
-        # 解压
-        extract_subdir = os.path.join(EXTRACT_DIR, notice_id)
-        if os.path.exists(extract_subdir):
-            shutil.rmtree(extract_subdir)
+        # unzip -UU 能正确提取, 用cmd dir(绝对路径)代替os.walk找XLSX
+        import hashlib
+        dir_hash = hashlib.md5(notice_id.encode()).hexdigest()[:8]
+        extract_subdir = os.path.join(os.path.abspath(EXTRACT_DIR), notice_id + '_' + dir_hash)
+        try:
+            subprocess.run(['cmd','/c','rmdir','/s','/q',extract_subdir], capture_output=True, timeout=10)
+        except: pass
         os.makedirs(extract_subdir, exist_ok=True)
 
-        try:
-            subprocess.run(['unzip', '-o', '-UU', task['zip_path'], '-d', extract_subdir],
-                          capture_output=True, timeout=30)
-        except Exception:
-            pass
+        subprocess.run(['unzip','-o','-UU',task['zip_path'],'-d',extract_subdir],
+                      capture_output=True, timeout=30)
 
-        # 找所有XLSX, 用表头识别货物清单
+        # 递归解压嵌套ZIP
+        for _ in range(3):
+            r = subprocess.run(['cmd','/c','dir','/s','/b',
+                os.path.join(extract_subdir,'*.zip')],
+                capture_output=True, text=True, encoding='gbk', errors='replace', timeout=15)
+            zips = [p.strip() for p in r.stdout.split('\n') if p.strip().lower().endswith('.zip')]
+            if not zips: break
+            for zp in zips:
+                try:
+                    if os.path.getsize(zp) < 100: continue
+                    dest = zp.rsplit('.',1)[0]
+                    os.makedirs(dest, exist_ok=True)
+                    subprocess.run(['unzip','-o','-UU',zp,'-d',dest], capture_output=True, timeout=30)
+                    os.remove(zp)
+                except: pass
+
+        # 找货物清单XLSX
         goods_list_xlsx = None
-        for root, dirs, files in os.walk(extract_subdir):
-            for f in files:
-                if f.endswith('.xlsx'):
-                    fp = os.path.join(root, f)
-                    if os.path.getsize(fp) <= 0:
-                        continue
-                    try:
-                        wb = openpyxl.load_workbook(fp, data_only=True)
-                        if wb.sheetnames:
-                            ws = wb[wb.sheetnames[0]]
-                            h_row = [str(c.value or '') for c in
-                                     next(ws.iter_rows(min_row=1, max_row=1))]
-                            if GOODS_LIST_SIGNATURE in h_row:
-                                goods_list_xlsx = fp
-                                wb.close()
-                                break
+        r = subprocess.run(['cmd','/c','dir','/s','/b',
+            os.path.join(extract_subdir,'*.xlsx')],
+            capture_output=True, text=True, encoding='gbk', errors='replace', timeout=15)
+        for line in r.stdout.split('\n'):
+            fp = line.strip()
+            if not fp.lower().endswith('.xlsx'): continue
+            try:
+                if os.path.getsize(fp) <= 0: continue
+                wb = openpyxl.load_workbook(fp, data_only=True)
+                if wb.sheetnames:
+                    ws = wb[wb.sheetnames[0]]
+                    h_row = [str(c.value or '') for c in next(ws.iter_rows(min_row=1, max_row=1))]
+                    if any(sig in h_row for sig in GOODS_LIST_SIGNATURES):
+                        goods_list_xlsx = fp
                         wb.close()
-                    except Exception:
-                        continue
-            if goods_list_xlsx:
-                break
+                        break
+                wb.close()
+            except: continue
 
         if not goods_list_xlsx:
             print(f"  -> 未找到货物清单XLSX")
@@ -399,13 +420,17 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
                                     'reason': 'no_goods_list_xlsx'})
             continue
 
-        # 保存Excel到 data/excels
+        # 保存Excel到 data/excels (goods_list_xlsx是临时文件)
         excel_name = task['zip_name'] + ".xlsx"
         saved_excel = os.path.join(EXCEL_DIR, excel_name)
         shutil.copy2(goods_list_xlsx, saved_excel)
+        try:
+            os.unlink(goods_list_xlsx)  # 删除临时文件
+        except Exception:
+            pass
 
         # 解析
-        items, parse_errors = parse_goods_list(notice_id, goods_list_xlsx)
+        items, parse_errors = parse_goods_list(notice_id, saved_excel)
 
         if not items and not parse_errors:
             parse_errors.append("all_sheets_no_goods_list_signature")
@@ -510,6 +535,112 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
     return stats
 
 
+def _find_goods_xlsx_in_zip(zip_path: str) -> str | None:
+    """
+    纯Python内存解压ZIP, 递归处理嵌套ZIP, 找到货物清单XLSX。
+    使用monkey-patch绕过zipfile的文件名编码校验。
+    """
+    import tempfile, zlib, struct
+
+    # Monkey-patch: 绕过文件名编码校验
+    _original_open = zipfile.ZipFile.open
+    def _patched_open(self, name, mode='r', *args, **kwargs):
+        if isinstance(name, zipfile.ZipInfo):
+            info = name
+        else:
+            info = self.getinfo(name)
+        # 直接用header_offset读取原始字节, 跳过文件名校验
+        with open(self.filename, 'rb') as raw_f:
+            raw_f.seek(info.header_offset)
+            sig = raw_f.read(4)
+            if sig != b'PK\x03\x04':
+                raise zipfile.BadZipFile('Bad local header')
+            raw_f.read(22)
+            comp_size = struct.unpack('<I', raw_f.read(4))[0]
+            uncomp_size = struct.unpack('<I', raw_f.read(4))[0]
+            name_len = struct.unpack('<H', raw_f.read(2))[0]
+            extra_len = struct.unpack('<H', raw_f.read(2))[0]
+            raw_f.seek(name_len + extra_len, 1)
+            raw = raw_f.read(comp_size)
+        if comp_size == uncomp_size:
+            return io.BytesIO(raw)
+        return io.BytesIO(zlib.decompress(raw, -15))
+
+    zipfile.ZipFile.open = _patched_open
+
+    def _extract_and_find(fp: str, depth: int = 0) -> str | None:
+        if depth > 3:
+            return None
+        try:
+            with zipfile.ZipFile(fp, 'r') as zf:
+                for info in list(zf.infolist()):
+                    name_lower = info.filename.lower()
+                    if name_lower.endswith('.xlsx') and info.file_size > 500:
+                        try:
+                            xlsx_data = zf.read(info)
+                            wb = openpyxl.load_workbook(io.BytesIO(xlsx_data), data_only=True)
+                            if wb.sheetnames:
+                                ws = wb[wb.sheetnames[0]]
+                                h_row = [str(c.value or '') for c in
+                                         next(ws.iter_rows(min_row=1, max_row=1))]
+                                if any(sig in h_row for sig in GOODS_LIST_SIGNATURES):
+                                    tmp = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+                                    tmp.write(xlsx_data)
+                                    tmp.close()
+                                    wb.close()
+                                    return tmp.name
+                            wb.close()
+                        except Exception:
+                            continue
+                for info in list(zf.infolist()):
+                    name_lower = info.filename.lower()
+                    if name_lower.endswith('.zip') and info.file_size > 100:
+                        try:
+                            inner_data = zf.read(info)
+                            tmp_zip = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
+                            tmp_zip.write(inner_data)
+                            tmp_zip.close()
+                            result = _extract_and_find(tmp_zip.name, depth + 1)
+                            try: os.unlink(tmp_zip.name)
+                            except: pass
+                            if result:
+                                return result
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+        return None
+
+    result = _extract_and_find(zip_path)
+    zipfile.ZipFile.open = _original_open  # restore
+    return result
+
+
+def _extract_nested_zips(directory: str):
+    """递归解压目录中的嵌套ZIP文件 (处理ZIP内含ZIP的情况)
+    使用cmd dir命令替代os.walk以避免乱码文件名问题"""
+    extracted_any = True
+    while extracted_any:
+        extracted_any = False
+        # 用dir /s /b找所有ZIP文件 (避免os.walk乱码)
+        result = subprocess.run(
+            ['cmd', '/c', 'dir', '/s', '/b', os.path.join(directory, '*.zip')],
+            capture_output=True, text=True, timeout=15, encoding='gbk', errors='replace')
+        zip_paths = [p.strip() for p in result.stdout.split('\n') if p.strip().lower().endswith('.zip')]
+        for fp in zip_paths:
+            try:
+                if os.path.getsize(fp) < 100:
+                    continue
+                dest = fp.rsplit('.', 1)[0]
+                os.makedirs(dest, exist_ok=True)
+                subprocess.run(['unzip', '-o', '-UU', fp, '-d', dest],
+                              capture_output=True, timeout=30)
+                os.remove(fp)
+                extracted_any = True
+            except Exception:
+                pass
+
+
 def parse_goods_list(notice_id: str, xlsx_path: str) -> tuple[list[dict], list[str]]:
     """
     解析货物清单Excel。
@@ -557,7 +688,7 @@ def parse_goods_list(notice_id: str, xlsx_path: str) -> tuple[list[dict], list[s
 
                     items.append({
                         'sub_bid_code': safe_cell(row, col_map.get('sub_bid_code')),
-                        'sub_bid_name': sheet_name,
+                        'sub_bid_name': safe_cell(row, col_map.get('sub_bid_name_col')) or sheet_name,
                         'package_no': (safe_cell(row, col_map.get('package_no')) or
                                        safe_cell(row, col_map.get('package_name'))),
                         'material_name': mat_name,
