@@ -370,7 +370,7 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
             for f in files:
                 if f.endswith('.xlsx'):
                     fp = os.path.join(root, f)
-                    if os.path.getsize(fp) < 50000:
+                    if os.path.getsize(fp) < 20000:
                         continue
                     try:
                         wb = openpyxl.load_workbook(fp, data_only=True)
