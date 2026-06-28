@@ -191,8 +191,9 @@ def phase1_collect(conn):
         if m:
             year = int(m.group(1))
 
+        # 使用 INSERT OR IGNORE + UPDATE 保留 excel_status
         cursor.execute("""
-            INSERT OR REPLACE INTO bid_notices
+            INSERT OR IGNORE INTO bid_notices
                 (notice_id, title, code, publish_org_name, org_id,
                  notice_publish_time, notice_type, notice_type_name,
                  doctype, doc_id, doc_url, zbflag,
@@ -203,6 +204,22 @@ def phase1_collect(conn):
             n.notice_publish_time, n.notice_type, n.notice_type_name,
             n.doctype, n.first_page_doc_id, n.doc_url, 0,
             cat, batch, year,
+        ))
+        # 更新元数据（但不覆盖 excel_status）
+        cursor.execute("""
+            UPDATE bid_notices
+            SET title=?, code=?, publish_org_name=?,
+                notice_publish_time=?, notice_type=?, notice_type_name=?,
+                doctype=?, doc_id=?, doc_url=?,
+                category=?, bid_batch=?, bid_year=?,
+                updated_at=datetime('now')
+            WHERE notice_id=?
+        """, (
+            n.title, n.code, n.publish_org_name,
+            n.notice_publish_time, n.notice_type, n.notice_type_name,
+            n.doctype, n.first_page_doc_id, n.doc_url,
+            cat, batch, year,
+            n.notice_id,
         ))
         if cat == "material":
             material_count += 1
@@ -250,6 +267,10 @@ def phase3_download(conn, full_mode: bool = False) -> list[dict]:
 
         if os.path.exists(zip_path) and os.path.getsize(zip_path) > 1000:
             tasks.append({**n, 'zip_path': zip_path, 'zip_name': zip_name, 'status': 'exists'})
+            # 确保已有文件的状态正确
+            cursor.execute(
+                "UPDATE bid_notices SET excel_status='downloaded' WHERE notice_id=? AND excel_status='pending'",
+                (notice_id,))
             continue
 
         if full_mode or not os.path.exists(zip_path):
@@ -261,15 +282,26 @@ def phase3_download(conn, full_mode: bool = False) -> list[dict]:
                         f.write(resp.content)
                     tasks.append({**n, 'zip_path': zip_path, 'zip_name': zip_name,
                                   'status': 'downloaded'})
+                    cursor.execute(
+                        "UPDATE bid_notices SET excel_status='downloaded' WHERE notice_id=?",
+                        (notice_id,))
                     new_downloads += 1
                     time.sleep(0.3)
                 else:
                     tasks.append({**n, 'zip_path': None, 'zip_name': zip_name,
                                   'status': f'empty({len(resp.content)}b)'})
+                    cursor.execute(
+                        "UPDATE bid_notices SET excel_status='no_file' WHERE notice_id=?",
+                        (notice_id,))
             except Exception as e:
                 tasks.append({**n, 'zip_path': None, 'zip_name': zip_name,
                               'status': f'error: {str(e)[:50]}'})
+                cursor.execute(
+                    "UPDATE bid_notices SET excel_status='no_file' WHERE notice_id=?",
+                    (notice_id,))
+        conn.commit()
 
+    conn.commit()
     done = sum(1 for t in tasks if t['status'] in ('downloaded', 'exists'))
     skipped = sum(1 for t in tasks if t['zip_path'] is None)
     print(f"可处理: {done} 条 (新下载: {new_downloads})")
@@ -358,6 +390,10 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
 
         if not goods_list_xlsx:
             print(f"  -> 未找到货物清单XLSX")
+            cursor.execute(
+                "UPDATE bid_notices SET excel_status='no_file' WHERE notice_id=?",
+                (notice_id,))
+            conn.commit()
             stats['failed'] += 1
             failed_entries.append({'notice_id': notice_id, 'title': title,
                                     'reason': 'no_goods_list_xlsx'})
@@ -376,6 +412,10 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
 
         if not items:
             print(f"  -> 解析到0条 (原因: {parse_errors[:2]})")
+            cursor.execute(
+                "UPDATE bid_notices SET excel_status='parse_failed' WHERE notice_id=?",
+                (notice_id,))
+            conn.commit()
             stats['failed'] += 1
             failed_entries.append({
                 'notice_id': notice_id, 'title': title,
@@ -441,12 +481,13 @@ def phase4_parse(conn, tasks: list[dict]) -> dict:
                           notice_id, task['pub_time']))
         conn.commit()
 
-        # 标记已解析
+        # 标记解析成功
         cursor.execute("""
             UPDATE bid_notices
-            SET detail_fetched=1, detail_fetched_at=datetime('now')
+            SET excel_status='parsed', excel_path=?, detail_fetched=1,
+                detail_fetched_at=datetime('now')
             WHERE notice_id=?
-        """, (notice_id,))
+        """, (excel_name, notice_id))
         conn.commit()
 
         stats['success'] += 1
@@ -557,35 +598,38 @@ def phase5_verify(conn):
     """)
     total_material = cursor.fetchone()[0]
 
-    # 已下载
+    # 状态分布
+    cursor.execute("""
+        SELECT excel_status, COUNT(*) FROM bid_notices
+        WHERE category='material' AND doctype='doci-bid'
+        GROUP BY excel_status
+    """)
+    status_dist = {r[0]: r[1] for r in cursor}
+
     cursor.execute("""
         SELECT COUNT(DISTINCT notice_id) FROM bid_items
     """)
     with_items = cursor.fetchone()[0]
 
-    # 已标记解析
-    cursor.execute("""
-        SELECT COUNT(*) FROM bid_notices
-        WHERE category='material' AND doctype='doci-bid' AND detail_fetched=1
-    """)
-    detail_fetched = cursor.fetchone()[0]
+    print(f"\n物资正刊: {total_material} 条")
+    print(f"状态分布: pending={status_dist.get('pending',0)} | downloaded={status_dist.get('downloaded',0)} | parsed={status_dist.get('parsed',0)} | no_file={status_dist.get('no_file',0)} | parse_failed={status_dist.get('parse_failed',0)}")
+    print(f"有明细: {with_items} 条公告")
 
-    print(f"\n物资正刊: {total_material} | 已解析: {detail_fetched} | 有明细: {with_items}")
-
-    # 未处理列表
+    # 未处理列表 (不是 parsed 状态的)
     cursor.execute("""
-        SELECT notice_id, title, notice_publish_time, code
+        SELECT notice_id, title, notice_publish_time, code, excel_status
         FROM bid_notices
-        WHERE category='material' AND doctype='doci-bid' AND detail_fetched=0
+        WHERE category='material' AND doctype='doci-bid'
+          AND excel_status != 'parsed'
         ORDER BY notice_publish_time DESC
     """)
-    pending = [dict(zip(['nid','title','pt','code'], r)) for r in cursor]
+    pending = [dict(zip(['nid','title','pt','code','status'], r)) for r in cursor]
     if pending:
-        print(f"\n未处理 ({len(pending)} 条):")
-        for p in pending[:8]:
-            print(f"  [{p['pt']}] {p['title'][:70]}")
-        if len(pending) > 8:
-            print(f"  ... 还有 {len(pending)-8} 条")
+        print(f"\n未完成解析 ({len(pending)} 条):")
+        for p in pending[:10]:
+            print(f"  [{p['status']}] [{p['pt']}] {p['title'][:65]}")
+        if len(pending) > 10:
+            print(f"  ... 还有 {len(pending)-10} 条")
 
     # 重复检查
     cursor.execute("""
@@ -629,9 +673,11 @@ def phase5_verify(conn):
             print(f"  [{fe['notice_id']}] {fe['reason']}: {fe.get('title','')[:60]}")
 
     return {
-        'total_material': total_material, 'detail_fetched': detail_fetched,
+        'total_material': total_material,
+        'parsed': status_dist.get('parsed', 0),
         'with_items': with_items, 'pending': len(pending),
         'total_items': total_items, 'org_count': org_count,
+        'status_dist': status_dist,
         'failed': len(json.load(open(FAILED_LOG, encoding='utf-8')))
                   if os.path.exists(FAILED_LOG) else 0,
     }
@@ -670,9 +716,9 @@ def main():
     print(f"\n{'='*60}")
     print("流水线完成")
     print(f"{'='*60}")
-    print(f"物资公告: {result['total_material']} | 已解析: {result['detail_fetched']}"
-          f" | 物资: {result['total_items']} | 单位: {result['org_count']}"
-          f" | 待处理: {result['pending']} | 失败: {result['failed']}")
+    sd = result.get('status_dist', {})
+    print(f"物资公告: {result['total_material']} | parsed={sd.get('parsed',0)} downloaded={sd.get('downloaded',0)} no_file={sd.get('no_file',0)} failed={sd.get('parse_failed',0)} pending={sd.get('pending',0)}")
+    print(f"物资明细: {result['total_items']} | 单位: {result['org_count']}")
     print(f"Excel目录: {EXCEL_DIR}")
     print(f"数据库:   {DB_PATH}")
     print(f"完成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

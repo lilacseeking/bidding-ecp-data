@@ -14,3 +14,6 @@ data/ecp_data.db
 data/failed_parse.json
 data/hardcoded_fixes.json
 *.tmp
+.idea/
+identifier.sqlite
+outputs/

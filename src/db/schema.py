@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS bid_notices (
     detail_fetched  INTEGER DEFAULT 0,              -- 详情是否已爬取
     detail_fetched_at TEXT,                          -- 详情爬取时间
     excel_path      TEXT,                            -- 保存的Excel文件路径
+    excel_status    TEXT DEFAULT 'pending',          -- Excel解析状态: pending/downloaded/parsed/no_file/parse_failed
 
     created_at      TEXT DEFAULT (datetime('now')),
     updated_at      TEXT DEFAULT (datetime('now'))
