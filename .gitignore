@@ -16,5 +16,4 @@ data/hardcoded_fixes.json
 *.tmp
 .idea/
 identifier.sqlite
-outputs/
 data/test_*
