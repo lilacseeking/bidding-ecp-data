@@ -355,55 +355,115 @@ def plot_category_heatmap(conn):
 
 
 # ============================================================
-# 图表6: 6种核心物资月度趋势 (每页2行×3列)
+# 图表6: TOP20 高频采购物资月度趋势 (完整自然月X轴, 0值填充)
 # ============================================================
 def plot_core_materials_trend(conn):
     c = conn.cursor()
+    # 获取完整自然月范围
+    c.execute("SELECT MIN(demand_month), MAX(demand_month) FROM bid_items WHERE demand_month IS NOT NULL")
+    min_m, max_m = c.fetchone()
+    all_months = []
+    y, m = int(min_m[:4]), int(min_m[4:])
+    y_end, m_end = int(max_m[:4]), int(max_m[4:])
+    while (y < y_end) or (y == y_end and m <= m_end):
+        all_months.append("{:04d}{:02d}".format(y, m))
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+
+    n_months = len(all_months)
+
+    # TOP20 按总需求量排序
     c.execute("""SELECT material_name, SUM(demand_quantity) as total
         FROM material_demand_total GROUP BY material_name
-        ORDER BY total DESC LIMIT 6""")
-    top6 = c.fetchall()
-    if not top6:
+        ORDER BY total DESC LIMIT 20""")
+    top20 = c.fetchall()
+    if not top20:
         return
 
-    fig, axes = plt.subplots(3, 2, figsize=(20, 18))
-    fig.suptitle('国网冀北电力 — 核心物资月度需求趋势', fontsize=16, fontweight='bold', y=0.99)
+    n_cols = 4
+    n_rows = 5
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(36, 28))
+    fig.suptitle('国网冀北电力 — TOP20 物资月度需求趋势 (完整自然月)', fontsize=18, fontweight='bold', y=0.99)
 
-    colors = ['#E53935', '#1E88E5', '#43A047', '#FB8C00', '#8E24AA', '#00ACC1']
+    # 20种颜色: Tableau 20 调色板
+    colors = [
+        '#E53935', '#1E88E5', '#43A047', '#FB8C00',
+        '#8E24AA', '#00ACC1', '#F4511E', '#3949AB',
+        '#7CB342', '#C0CA33', '#5E35B1', '#00897B',
+        '#D81B60', '#6D4C41', '#546E7A', '#FDD835',
+        '#039BE5', '#33A860', '#EF6C00', '#8D6E63',
+    ]
 
-    for idx, ax in enumerate(axes.flat):
-        mat_name = top6[idx][0]
-        c.execute("""SELECT demand_month, demand_quantity FROM material_demand_total
-            WHERE material_name=? ORDER BY demand_month""", (mat_name,))
-        rows = c.fetchall()
-        if not rows:
-            continue
+    # 预查询所有物资的月度数据
+    placeholders = ','.join(['?'] * 20)
+    c.execute("""SELECT material_name, demand_month, demand_quantity
+        FROM material_demand_total
+        WHERE material_name IN ({})
+        ORDER BY material_name, demand_month""".format(placeholders),
+        [t[0] for t in top20])
+    all_rows = c.fetchall()
 
-        months = [r[0] for r in rows]
-        quantities = [r[1] for r in rows]
+    mat_month_data = {}
+    for name, dm, qty in all_rows:
+        if name not in mat_month_data:
+            mat_month_data[name] = {}
+        mat_month_data[name][dm] = qty
 
-        ax.fill_between(range(len(months)), quantities, alpha=0.25, color=colors[idx])
-        ax.plot(range(len(months)), quantities, 'o-', color=colors[idx],
-                linewidth=2, markersize=3, markerfacecolor='white')
+    for idx in range(20):
+        ax = axes[idx // n_cols][idx % n_cols]
+        mat_name = top20[idx][0]
+        total = top20[idx][1]
 
-        if quantities:
-            mx_idx = quantities.index(max(quantities))
-            ax.annotate(f'{quantities[mx_idx]:,.0f}', xy=(mx_idx, quantities[mx_idx]),
-                       xytext=(0, 10), textcoords='offset points', fontsize=10,
+        month_qty = mat_month_data.get(mat_name, {})
+        quantities = [month_qty.get(m, 0) for m in all_months]
+        nonzero_cnt = sum(1 for v in quantities if v > 0)
+
+        ax.fill_between(range(n_months), quantities, alpha=0.25, color=colors[idx])
+        ax.plot(range(n_months), quantities, 'o-', color=colors[idx],
+                linewidth=1.5, markersize=2, markerfacecolor='white',
+                markeredgewidth=0.5)
+
+        # 标注峰值
+        nonzero = [(i, v) for i, v in enumerate(quantities) if v > 0]
+        if nonzero:
+            mx_idx, mx_val = max(nonzero, key=lambda x: x[1])
+            ax.annotate('{:.1f}万'.format(mx_val / 10000) if mx_val >= 10000 else '{:.0f}'.format(mx_val),
+                       xy=(mx_idx, mx_val),
+                       xytext=(0, 10), textcoords='offset points', fontsize=8,
                        ha='center', color=colors[idx], fontweight='bold')
 
-        tick_pos = list(range(0, len(months), max(1, len(months)//8)))
-        tick_lbl = [f"{months[i][:4]}-{months[i][4:]}" for i in tick_pos]
-        ax.set_xticks(tick_pos)
-        ax.set_xticklabels(tick_lbl, fontsize=7, rotation=30, ha='right')
-        ax.set_title(f'{mat_name[:40]}', fontsize=13, loc='left')
-        ax.grid(axis='y', alpha=0.3, linestyle='--')
-        ax.set_xlim(-0.5, len(months) - 0.5)
+        # X轴：每年标一个刻度
+        year_starts = [i for i, m in enumerate(all_months) if m[4:] == '01']
+        if idx >= (n_rows - 1) * n_cols:  # 最后一行显示年份标签
+            year_labels = [all_months[i][:4] for i in year_starts]
+            ax.set_xticks(year_starts)
+            ax.set_xticklabels(year_labels, fontsize=7)
+        else:
+            ax.set_xticks(year_starts)
+            ax.set_xticklabels([])
+        for ys in year_starts:
+            ax.axvline(ys, color='#ccc', linestyle='--', linewidth=0.4, alpha=0.4)
 
-    path = os.path.join(OUTPUT_DIR, '核心物资月度趋势.png')
+        # 标题: rank + 物资名 + 有数据月数 + 总量
+        short_name = mat_name[:28] + '..' if len(mat_name) > 30 else mat_name
+        ax.set_title('#{} {} | {}月 | {:.0f}万'.format(
+            idx + 1, short_name, nonzero_cnt, total / 10000),
+            fontsize=9, loc='left')
+        ax.grid(axis='y', alpha=0.2, linestyle='--')
+        ax.set_xlim(-0.5, n_months - 0.5)
+
+        ymax = max(quantities) if max(quantities) > 0 else 1
+        ax.set_ylim(-ymax * 0.02, ymax * 1.15)
+        ax.tick_params(axis='y', labelsize=7)
+
+    fig.tight_layout(rect=[0.02, 0.02, 0.98, 0.96])
+
+    path = os.path.join(OUTPUT_DIR, '物资需求Top5月度趋势.png')
     fig.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
     plt.close()
-    print(f'  [OK] {os.path.basename(path)}')
+    print('  [OK] {} ({} 个自然月, TOP20物资, 含0值)'.format(os.path.basename(path), n_months))
 
 
 # ============================================================
