@@ -5,6 +5,5 @@
   "src/fetch_external_factors.py": "540548a3b586cfa0ba49b8c7f89905fe8a9aff043404af8792e09d8256bfb595",
   "build_real_data.py": "bd24c09e7700cd5c3017a88a808091ce4d77a21e6e32a7f868fd507c68db4c49",
   "src/demand_stats.py": "bd8443952c85e90185588562639d73b8dd0a4ef859c45e611f8af33f12ea57b7",
-  "src/fetch_batch_features.py": "4fde698f8f9e3bc2f04fa445138a97653c37a9fdd0d826ca62a28863864c36ea",
-  "validate_factors.py": "63846e659a7e1059ab13f0acce2539bcc2b7085bea6185f1df60758135b549c7"
+  "src/fetch_batch_features.py": "4fde698f8f9e3bc2f04fa445138a97653c37a9fdd0d826ca62a28863864c36ea"
 }
