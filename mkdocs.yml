@@ -1,0 +1,45 @@
+site_name: 电力物资需求预测
+site_description: 基于国网ECP2.0平台采购数据的电力物资月度需求量预测研究文档
+docs_dir: docs
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+  palette:
+    primary: indigo
+    accent: deep orange
+nav:
+  - 首页: index.md
+  - 数据层:
+    - 数据合理性验证: 数据层/数据合理性验证.md
+    - 数据选择分析: 数据层/数据选择分析.md
+    - 数据稀疏度与合并方案: 数据层/数据稀疏度与合并方案.md
+  - 方法层:
+    - 影响因子可行性验证: 方法层/影响因子可行性验证报告.md
+    - 影响因子增强方案: 方法层/影响因子增强方案.md
+    - 模型合理性评估: 方法层/模型合理性评估.md
+    - 大类vs品类相关性: 方法层/大类vs品类相关性分析.md
+  - 工程层:
+    - 项目逻辑步骤拆解: 工程层/项目逻辑步骤拆解.md
+    - 代码资产价值评估: 工程层/代码资产价值评估.md
+    - 步骤确定性评估: 工程层/步骤确定性评估.md
+    - 两阶段预测模型: 工程层/两阶段预测模型说明.md
+  - 决策层:
+    - 最终执行方案: 决策层/最终执行方案.md
+    - 投资计划因子分析: 决策层/国网投资计划影响因子可行性分析.md
+    - 创新模型方案: 决策层/电力物资需求预测创新模型方案.md
+    - 研究进展与问题: 决策层/研究进展与问题解决方案.md
+    - 文档管理体系实施方案: 文档管理体系实施方案.md
+plugins:
+  - search
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - tables
+  - toc:
+      permalink: true

@@ -20,3 +20,4 @@ data/hardcoded_fixes.json
 .idea/
 identifier.sqlite
 data/test_*
+site/
