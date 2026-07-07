@@ -7,7 +7,7 @@
   2. 物资大类分布饼图
   3. 物资大类年度堆叠柱状图
   4. 月度公告数量趋势
-  5. TOP15 物资需求量排名
+  5. TOP15 物资需求量排名  
   6. 月度需求热力图 (物资大类 × 月份)
 """
 import sys, os, io
@@ -147,7 +147,7 @@ def plot_yearly_category_stacked(conn):
 
     ax.set_xticks(x)
     ax.set_xticklabels(years, fontsize=12)
-    ax.set_title('国网冀北电力 — 年度招标物资总量趋势 (按大类堆叠)', fontsize=16, fontweight='bold', pad=15)
+    ax.set_title('国家电网 — 年度招标物资总量趋势 (按大类堆叠)', fontsize=16, fontweight='bold', pad=15)
     ax.set_ylabel('需求数量 (台/套/千米等)', fontsize=12)
     ax.legend(loc='upper left', fontsize=9, ncol=3, framealpha=0.9)
     ax.grid(axis='y', alpha=0.3, linestyle='--')
@@ -188,7 +188,7 @@ def plot_category_pie(conn):
         t.set_fontweight('bold')
     for t in texts:
         t.set_fontsize(11)
-    ax.set_title('国网冀北电力 — 物资大类需求分布 (2020-2026累计)', fontsize=16, fontweight='bold', pad=20)
+    ax.set_title('国家电网 — 物资大类需求分布 (2020-2026累计)', fontsize=16, fontweight='bold', pad=20)
 
     path = os.path.join(OUTPUT_DIR, '物资大类分布饼图.png')
     fig.savefig(path, dpi=150, bbox_inches='tight', facecolor='white')
@@ -228,7 +228,7 @@ def plot_monthly_notice_count(conn):
     tick_lbl = [f"{months[i][:4]}-{months[i][4:]}" for i in tick_pos]
     ax.set_xticks(tick_pos)
     ax.set_xticklabels(tick_lbl, fontsize=8, rotation=45, ha='right')
-    ax.set_title('国网冀北电力 — 月度招标物资公告数量趋势', fontsize=16, fontweight='bold')
+    ax.set_title('国家电网 — 月度招标物资公告数量趋势', fontsize=16, fontweight='bold')
     ax.set_ylabel('涉及公告数', fontsize=12)
     ax.grid(axis='y', alpha=0.3, linestyle='--')
 
@@ -272,7 +272,7 @@ def plot_top15_materials(conn):
     ax.set_yticks(range(len(names)))
     ax.set_yticklabels(names, fontsize=10)
     ax.set_xlabel('需求数量', fontsize=12)
-    ax.set_title('国网冀北电力 — TOP15 物资需求排名', fontsize=16, fontweight='bold')
+    ax.set_title('国家电网 — TOP15 物资需求排名', fontsize=16, fontweight='bold')
     ax.grid(axis='x', alpha=0.3, linestyle='--')
 
     for bar, val in zip(bars, values):
@@ -344,7 +344,7 @@ def plot_category_heatmap(conn):
                 ax.text(j, i, label, ha='center', va='center', fontsize=8,
                        fontweight='bold', color='white' if data_log[i,j] > data_log.max()*0.6 else 'black')
 
-    ax.set_title('国网冀北电力 — 物资大类 × 年度需求热力图', fontsize=16, fontweight='bold', pad=15)
+    ax.set_title('国家电网 — 物资大类 × 年度需求热力图', fontsize=16, fontweight='bold', pad=15)
     cbar = plt.colorbar(im, ax=ax, shrink=0.8)
     cbar.set_label('log(1+需求量)', fontsize=10)
 
@@ -385,7 +385,7 @@ def plot_core_materials_trend(conn):
     n_cols = 4
     n_rows = 5
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(36, 28))
-    fig.suptitle('国网冀北电力 — TOP20 物资月度需求趋势 (完整自然月)', fontsize=18, fontweight='bold', y=0.99)
+    fig.suptitle('国家电网 — TOP20 物资月度需求趋势 (完整自然月)', fontsize=18, fontweight='bold', y=0.99)
 
     # 20种颜色: Tableau 20 调色板
     colors = [
@@ -496,7 +496,7 @@ def plot_notice_type_comparison(conn):
     tick_lbl = [f"{months_sorted[i][:4]}-{months_sorted[i][4:]}" for i in tick_pos]
     ax.set_xticks(tick_pos)
     ax.set_xticklabels(tick_lbl, fontsize=8, rotation=45, ha='right')
-    ax.set_title('国网冀北电力 — 招标公告 vs 采购公告月度分布', fontsize=16, fontweight='bold')
+    ax.set_title('国家电网 — 招标公告 vs 采购公告月度分布', fontsize=16, fontweight='bold')
     ax.set_ylabel('公告数量', fontsize=12)
     ax.legend(fontsize=10)
     ax.grid(axis='y', alpha=0.3, linestyle='--')

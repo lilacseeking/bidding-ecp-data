@@ -1,5 +1,5 @@
 """
-ECP2.0 国网冀北电力物资采购数据采集流水线
+ECP2.0 国家电网物资采购数据采集流水线
 
 流程:
   Phase 1: 从 noteList API 采集公告元数据 → bid_notices 表
@@ -30,7 +30,7 @@ from db.schema import init_db, get_connection
 # ============================================================
 # 配置
 # ============================================================
-TARGET_ORG_ID = ORG_MAP["国网冀北电力有限公司"]
+TARGET_ORG_ID = ORG_MAP["国家电网有限公司"]
 DOWNLOAD_URL = "https://ecp.sgcc.com.cn/ecp2.0/ecpwcmcore//index/downLoadBid"
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ZIP_DIR = os.path.join(PROJECT_ROOT, "data", "excels", "zip")
@@ -819,7 +819,7 @@ def _update_all_outputs():
     # 4. 交付文件 (3 Sheet: 公告 + 物资明细 + 物资统计)
     try:
         _export_delivery()
-        print("  [OK] 冀北电力物资采购数据.xlsx")
+        print("  [OK] 国家电网物资采购数据.xlsx")
     except Exception as e:
         print(f"  [SKIP] 交付文件: {e}")
 
@@ -893,7 +893,7 @@ def _export_delivery():
     ws3.column_dimensions['D'].width = 12
     ws3.freeze_panes = 'A2'
 
-    out = os.path.join(PROJECT_ROOT, 'outputs', '冀北电力物资采购数据.xlsx')
+    out = os.path.join(PROJECT_ROOT, 'outputs', '国家电网物资采购数据.xlsx')
     os.makedirs(os.path.dirname(out), exist_ok=True)
     wb.save(out)
     conn.close()

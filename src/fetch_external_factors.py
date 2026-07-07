@@ -3,6 +3,17 @@
 写入 SQLite + 导出 Excel
 
 执行: python src/fetch_external_factors.py
+
+⚠️ 废弃通知 (2026-07-06):
+此文件采集的 6 个市场因子（month_sin/cos, copper_price, aluminum_price,
+industrial_elec, industrial_elec_yoy）经 Spearman 相关性实验验证，
+与 3 种目标物资的月度需求量的 |ρ| 均 < 0.26，对预测无贡献。
+此外，国网采用长协价格而非期货价格，铜铝期货数据在此场景下不适用。
+
+替代方案: 新建 src/fetch_batch_features.py，从 ECP 数据库提取批次事件特征
+（transformer_bids |ρ|=0.66, monthly_bid_count |ρ|=0.63, uhv_bids |ρ|=0.35）。
+
+详见: book/影响因子可行性验证报告.md
 """
 import sys, os, io, sqlite3
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

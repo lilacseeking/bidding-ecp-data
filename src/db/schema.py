@@ -18,8 +18,8 @@ DROP TABLE IF EXISTS crawl_log;
 DROP TABLE IF EXISTS notice_attachments;
 DROP TABLE IF EXISTS org_units;
 DROP TABLE IF EXISTS material_demand_stats;
-DROP VIEW IF EXISTS v_jibei_material_summary;
-DROP VIEW IF EXISTS v_jibei_subsidiary_freq;
+DROP VIEW IF EXISTS v_sgcc_material_summary;
+DROP VIEW IF EXISTS v_sgcc_subsidiary_freq;
 """
 
 SCHEMA_SQL = """

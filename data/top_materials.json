@@ -1,0 +1,81 @@
+{
+  "range": "201911-202607",
+  "total_months": 81,
+  "results": [
+    {
+      "name": "交流避雷器",
+      "months": 52,
+      "total_qty": 77160.0
+    },
+    {
+      "name": "电容式电压互感器",
+      "months": 52,
+      "total_qty": 9122.0
+    },
+    {
+      "name": "交流支柱绝缘子",
+      "months": 50,
+      "total_qty": 67909.0
+    },
+    {
+      "name": "断路器保护",
+      "months": 50,
+      "total_qty": 1213.0
+    },
+    {
+      "name": "电抗器保护",
+      "months": 50,
+      "total_qty": 781.0
+    },
+    {
+      "name": "线路保护",
+      "months": 49,
+      "total_qty": 7155.0
+    },
+    {
+      "name": "10kV变压器",
+      "months": 49,
+      "total_qty": 3061.0
+    },
+    {
+      "name": "变压器保护",
+      "months": 49,
+      "total_qty": 2788.0
+    },
+    {
+      "name": "母线保护",
+      "months": 49,
+      "total_qty": 2481.0
+    },
+    {
+      "name": "500kVGIS组合电器",
+      "months": 49,
+      "total_qty": 2327.0
+    },
+    {
+      "name": "中性点电抗器",
+      "months": 49,
+      "total_qty": 403.0
+    },
+    {
+      "name": "高压开关柜",
+      "months": 48,
+      "total_qty": 62769.0
+    },
+    {
+      "name": "110kV三相隔离开关",
+      "months": 48,
+      "total_qty": 2772.0
+    },
+    {
+      "name": "中性点避雷器",
+      "months": 48,
+      "total_qty": 635.0
+    },
+    {
+      "name": "110kVSF6瓷柱式断路器",
+      "months": 48,
+      "total_qty": 237.0
+    }
+  ]
+}
