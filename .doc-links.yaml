@@ -1,0 +1,68 @@
+# 文档-代码映射表
+# 当代码文件变更时，对应的文档需要检查是否需要更新。
+# 格式: doc(文档路径) → codes(关联的代码文件) + sections(文档中涉及的章节)
+
+- doc: docs/数据层/数据合理性验证.md
+  codes:
+    - src/pipeline.py
+  sections:
+    - Phase 4 Excel解析
+    - detect_column_map
+    - demand_month
+
+- doc: docs/工程层/项目逻辑步骤拆解.md
+  codes:
+    - src/pipeline.py
+    - src/crawler/ecp_client.py
+    - src/db/schema.py
+    - src/fetch_external_factors.py
+    - build_real_data.py
+    - vmd-catboost/main.py
+
+- doc: docs/工程层/代码资产价值评估.md
+  codes:
+    - src/pipeline.py
+    - src/crawler/ecp_client.py
+    - src/db/schema.py
+    - src/demand_stats.py
+    - src/fetch_external_factors.py
+    - src/fetch_batch_features.py
+    - build_real_data.py
+    - vmd-catboost/main.py
+
+- doc: docs/方法层/影响因子可行性验证报告.md
+  codes:
+    - validate_factors.py
+    - src/fetch_external_factors.py
+    - src/fetch_batch_features.py
+
+- doc: docs/方法层/影响因子增强方案.md
+  codes:
+    - src/fetch_batch_features.py
+    - build_real_data.py
+
+- doc: docs/方法层/模型合理性评估.md
+  codes:
+    - vmd-catboost/main.py
+
+- doc: docs/工程层/两阶段预测模型说明.md
+  codes:
+    - vmd-catboost/main.py
+  sections:
+    - run_two_stage
+
+- doc: docs/方法层/大类vs品类相关性分析.md
+  codes:
+    - src/demand_stats.py
+
+- doc: docs/工程层/步骤确定性评估.md
+  codes:
+    - src/pipeline.py
+    - build_real_data.py
+    - vmd-catboost/main.py
+
+- doc: docs/决策层/最终执行方案.md
+  codes:
+    - src/pipeline.py
+    - vmd-catboost/main.py
+    - build_real_data.py

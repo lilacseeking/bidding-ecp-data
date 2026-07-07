@@ -379,3 +379,9 @@ CREATE UNIQUE INDEX idx_items_unique ON bid_items(
 |------|------|------|
 | `parsed` | 97 | 物资正刊全部解析成功 |
 | `pending` | 395 | 服务/变更/特殊文档 (无物资数据) |
+
+```aiignore
+cd bidding-ecp-data
+mkdocs serve    # 启动本地预览 http://localhost:8000
+mkdocs build    # 构建静态站点到 site/ 目录  
+```
