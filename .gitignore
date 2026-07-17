@@ -10,7 +10,9 @@ data/raw/
 data/downloads/
 data/extracted/
 data/excels/
+data/md/
 data_jibei/excels/
+data_jibei/md/
 data/ecp_data.db
 data/ecp_data.db.bak
 data_jibei/ecp_data.db
